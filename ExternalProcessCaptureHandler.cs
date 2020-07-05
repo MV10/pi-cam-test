@@ -4,6 +4,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
 using MMALSharp.Common;
 
 namespace MMALSharp.Handlers
@@ -176,6 +177,9 @@ namespace MMALSharp.Handlers
         /// <inheritdoc />
         public void Dispose()
         {
+            if (Common.Utility.MMALLog.Logger != null) 
+                Common.Utility.MMALLog.Logger.LogTrace("Disposing ExternalProcessCaptureHandler");
+
             if (!_process.HasExited)
             {
                 _process.Kill();

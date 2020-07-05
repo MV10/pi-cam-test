@@ -2,12 +2,16 @@
 
 Getting to know the Raspberry Pi camera and the [MMALSharp](https://github.com/techyian/MMALSharp) .NET library.
 
+It has some bugs I'm chasing down. Running lots of MP4 captures or just one streaming call kills MMAL and requires reboot. `ExternalProcessCaptureHandler` is a mild modification to MMALSharp's FFmpegCaptureHandler. Some details [here](https://github.com/techyian/MMALSharp/issues/154) if you're bored.
+
 ```
 Usage:
 pi-cam-test -jpg
 pi-cam-test -mp4 [seconds]
 pi-cam-test -stream [seconds]
 pi-cam-test -motion [seconds]
+
+Add "-debug" for verbose logging (from MMALSharp).
 ```
 
 Assumptions/defaults/etc:
@@ -20,7 +24,5 @@ Assumptions/defaults/etc:
 Motion-detection requires the GDI+ library:
 
 `sudo apt-get install libgdiplus` 
-
-It has some bugs I'm chasing down. Running lots of MP4 captures or just one streaming call kills MMAL and requires reboot. `ExternalProcessCaptureHandler` is a mild modification to MMALSharp's FFmpegCaptureHandler. Some details [here](https://github.com/techyian/MMALSharp/issues/154) if you're bored.
 
 Since this writes to ramdisk, keep in mind motion-detection can quickly produce very large files. I'm using a 1GB ramdisk and the .raw files fill that up after just 60 seconds or so with just four motion-detection events.

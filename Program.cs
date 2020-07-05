@@ -1,5 +1,7 @@
-﻿using MMALSharp;
+﻿using Microsoft.Extensions.Logging;
+using MMALSharp;
 using MMALSharp.Common;
+using MMALSharp.Common.Utility;
 using MMALSharp.Components;
 using MMALSharp.Config;
 using MMALSharp.Handlers;
@@ -7,6 +9,7 @@ using MMALSharp.Native;
 using MMALSharp.Ports;
 using MMALSharp.Ports.Outputs;
 using MMALSharp.Processors.Motion;
+using Serilog;
 using System;
 using System.Diagnostics;
 using System.Drawing;
@@ -18,13 +21,14 @@ namespace pi_cam_test
 {
     // TODO
     // verify defaults like MMAL FPS vs FFMPEG command line
-    // text overlay
     // implement splitter system
     // investigate ffmpeg internal MMAL support (noticed in a forum post)
 
     class Program
     {
         private static readonly string outputPath = "/media/ramdisk/";
+
+        private static bool useDebug = false;
 
         static async Task Main(string[] args)
         {
@@ -40,8 +44,10 @@ namespace pi_cam_test
                     var cmd = args[0].ToLower();
                     Console.WriteLine(cmd);
 
+                    useDebug = args[args.Length - 1].ToLower().Equals("-debug");
+
                     int seconds = 0;
-                    bool hasSeconds = args.Length == 2 && int.TryParse(args[1], out seconds) && seconds > 0;
+                    bool hasSeconds = args.Length > 1 && int.TryParse(args[1], out seconds) && seconds > 0;
 
                     switch (args[0].ToLower())
                     {
@@ -79,12 +85,14 @@ namespace pi_cam_test
                 if(showHelp)
                 {
                     Console.WriteLine("Usage:\npi-cam-test -jpg\npi-cam-test -mp4 [seconds]\npi-cam-test -stream [seconds]\npi-cam-test -motion [seconds]");
-                    Console.WriteLine("\nAll files are output to /media/ramdisk.\n*** Motion detection deletes all RAW and H264 files from the ramdisk.\n");
+                    Console.WriteLine("\nAdd -debug to activate MMALSharp verbose debug logging.\nAll files are output to /media/ramdisk.\n*** Motion detection deletes all RAW and H264 files from the ramdisk.\n");
                 }
             }
             catch(Exception ex)
             {
-                Console.WriteLine($"\n\nException:\n{ex.Message}");
+                var msg = $"Exception: {ex.Message}";
+                Console.WriteLine($"\n\n{msg}");
+                if (MMALLog.Logger != null) MMALLog.Logger.LogError(msg);
             }
             stopwatch.Stop();
             int min = (int)stopwatch.Elapsed.TotalMinutes;
@@ -135,8 +143,9 @@ namespace pi_cam_test
                 ExternalProcessCaptureHandler.EmitStdOutBuffer(stdout, token.Token)
             }).ConfigureAwait(false);
 
-            Console.WriteLine("cam.Cleanup disabled until exception is explained");
-            //cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
+            //Console.WriteLine("cam.Cleanup disabled until exception is explained");
+            Console.WriteLine("cam.Cleanup");
+            cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
 
             Console.WriteLine("Exiting.");
         }
@@ -187,8 +196,10 @@ namespace pi_cam_test
         // https://github.com/techyian/MMALSharp/wiki/Advanced-Examples/93b717ebbf4502f3a6c1ef99137a6b416dd0c3e6#motion-detection---frame-difference
         static async Task motion(int seconds)
         {
-            File.Delete(outputPath + "*.h264");
-            File.Delete(outputPath + "*.raw");
+            var h264files = outputPath + "*.h264";
+            var rawfiles = outputPath + "*.raw";
+            File.Delete(h264files);
+            File.Delete(rawfiles);
             
             var cam = GetConfiguredCamera();
 
@@ -284,6 +295,20 @@ namespace pi_cam_test
 
         static MMALCamera GetConfiguredCamera()
         {
+            if (useDebug)
+            {
+                Console.WriteLine("\nVerbose debug logging enabled to debug.log in current directory.");
+
+                File.Delete("debug.log");
+
+                MMALCameraConfig.Debug = true;
+                MMALLog.LoggerFactory = new LoggerFactory()
+                    .AddSerilog(new LoggerConfiguration()
+                        .MinimumLevel.Verbose()
+                        .WriteTo.File("debug.log")
+                        .CreateLogger());
+            }
+
             Console.WriteLine("Initializing...");
             var cam = MMALCamera.Instance;
 
