@@ -7,9 +7,7 @@ Usage:
 pi-cam-test -jpg
 pi-cam-test -mp4 [seconds]
 pi-cam-test -stream [seconds]
-
-TODO:
-pi-cam-test -motion
+pi-cam-test -motion [seconds]
 ```
 
 Assumptions/defaults/etc:
@@ -19,4 +17,10 @@ Assumptions/defaults/etc:
 * MJPEG streaming is 640 x 480 (4x4 binning mode 7)
 * requires ffmpeg and cvlc
 
-Has some bugs I'm chasing down. Running lots of MP4 captures or just one streaming call kills MMAL and requires reboot. `ExternalProcessCaptureHandler` is a mild modification to MMALSharp's FFmpegCaptureHandler. Some details [here](https://github.com/techyian/MMALSharp/issues/154) if you're bored.
+Motion-detection requires the GDI+ library:
+
+`sudo apt-get install libgdiplus` 
+
+It has some bugs I'm chasing down. Running lots of MP4 captures or just one streaming call kills MMAL and requires reboot. `ExternalProcessCaptureHandler` is a mild modification to MMALSharp's FFmpegCaptureHandler. Some details [here](https://github.com/techyian/MMALSharp/issues/154) if you're bored.
+
+Since this writes to ramdisk, keep in mind motion-detection can quickly produce very large files. I'm using a 1GB ramdisk and the .raw files fill that up after just 60 seconds or so with just four motion-detection events.
