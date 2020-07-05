@@ -38,6 +38,9 @@ namespace pi_cam_test
                     var cmd = args[0].ToLower();
                     Console.WriteLine(cmd);
 
+                    int seconds = 0;
+                    bool hasSeconds = args.Length == 2 && int.TryParse(args[1], out seconds) && seconds > 0;
+
                     switch (args[0].ToLower())
                     {
                         case "-jpg":
@@ -46,15 +49,15 @@ namespace pi_cam_test
                             break;
 
                         case "-mp4":
-                            if (args.Length == 2 && int.TryParse(args[1], out var duration))
+                            if (hasSeconds)
                             {
                                 showHelp = false;
-                                await mp4(duration);
+                                await mp4(seconds);
                             }
                             break;
 
                         case "-stream":
-                            if (args.Length == 2 && int.TryParse(args[1], out var seconds))
+                            if (hasSeconds)
                             {
                                 showHelp = false;
                                 await stream(seconds);
@@ -62,14 +65,18 @@ namespace pi_cam_test
                             break;
 
                         case "-motion":
-                            Console.WriteLine("Motion detection not yet implemented.");
-                            return;
+                            if (hasSeconds)
+                            {
+                                showHelp = false;
+                                await motion(seconds);
+                            }
+                            break;
                     }
                 }
 
                 if(showHelp)
                 {
-                    Console.WriteLine("Usage:\npi-cam-test -jpg\npi-cam-test -mp4 [seconds]\npi-cam-test -stream [seconds]\npi-cam-test -stream\npi-cam-test -motion");
+                    Console.WriteLine("Usage:\npi-cam-test -jpg\npi-cam-test -mp4 [seconds]\npi-cam-test -stream [seconds]\npi-cam-test -motion [seconds]");
                     Console.WriteLine("\nAll files are output to /media/ramdisk.\n\n");
                 }
             }
@@ -175,9 +182,10 @@ namespace pi_cam_test
             Console.WriteLine("Exiting.");
         }
 
-        static async Task motion()
+        // https://github.com/techyian/MMALSharp/wiki/Advanced-Examples/93b717ebbf4502f3a6c1ef99137a6b416dd0c3e6#motion-detection---frame-difference
+        static async Task motion(int seconds)
         {
-            throw new NotImplementedException();
+            var cam = GetConfiguredCamera();
         }
 
         static MMALCamera GetConfiguredCamera()
@@ -194,8 +202,6 @@ namespace pi_cam_test
             // overlay text
             var overlay = new AnnotateImage(" " + Environment.MachineName, 30, Color.White)
             {
-                AllowCustomBackgroundColour = true,
-                BgColour = Color.FromArgb(80, 0, 80),
                 ShowDateText = true,
                 ShowTimeText = true,
             };
