@@ -98,6 +98,7 @@ namespace pi_cam_test
             int min = (int)stopwatch.Elapsed.TotalMinutes;
             int sec = (int)stopwatch.Elapsed.TotalSeconds - (min * 60);
             Console.WriteLine($"\nElapsed: {min}:{sec:D2}\n\n");
+            if (MMALLog.Logger != null) MMALLog.Logger.LogDebug("Application exit");
         }
 
         static async Task jpg()
@@ -124,7 +125,7 @@ namespace pi_cam_test
             Console.WriteLine("Preparing pipeline...");
             cam.ConfigureCameraSettings();
             var stdout = ExternalProcessCaptureHandler.CreateStdOutBuffer();
-            var ffmpeg = new ExternalProcessCaptureHandler("ffmpeg", $"-framerate 24 -i - -b:v 2500k -c copy {pathname}", stdout);
+            using var ffmpeg = new ExternalProcessCaptureHandler("ffmpeg", $"-framerate 24 -i - -b:v 2500k -c copy {pathname}", stdout);
             // quality arg-help says set bitrate zero to use quality (for VBR), versus setting MMALVideoEncoder.MaxBitrateLevel4 (25MBps)
             var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: 0, timeout: null);
             using var encoder = new MMALVideoEncoder();
@@ -166,7 +167,7 @@ namespace pi_cam_test
             cam.ConfigureCameraSettings();
             var stdout = ExternalProcessCaptureHandler.CreateStdOutBuffer();
             // note cvlc requires real quotes even though we used apostrophes for the command line equivalent
-            var vlc = new ExternalProcessCaptureHandler("cvlc", @"stream:///dev/stdin --sout ""#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=--7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}"" :demux=h264", stdout);
+            using var vlc = new ExternalProcessCaptureHandler("cvlc", @"stream:///dev/stdin --sout ""#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=--7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}"" :demux=h264", stdout);
             // MMALVideoEncoder.MaxBitrateMJPEG = 25MBps
             var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 0, bitrate: MMALVideoEncoder.MaxBitrateMJPEG, timeout: null);
 
