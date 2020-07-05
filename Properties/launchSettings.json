@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "pi-cam-test": {
+      "commandName": "Project",
+      "commandLineArgs": "-jpg"
+    }
+  }
+}
