@@ -2,7 +2,7 @@
 
 Getting to know the Raspberry Pi camera and the [MMALSharp](https://github.com/techyian/MMALSharp) .NET library.
 
-It has some bugs I'm chasing down. Running lots of MP4 captures or just one streaming call kills MMAL and requires reboot. `ExternalProcessCaptureHandler` is a mild modification to MMALSharp's FFmpegCaptureHandler. Some details [here](https://github.com/techyian/MMALSharp/issues/154) if you're bored.
+Mostly working demo-quality sample code. It has a bug I'm chasing down where the final call to `Cleanup` throws an exception. `ExternalProcessCaptureHandler` is a mild modification to MMALSharp's FFmpegCaptureHandler. Some details [here](https://github.com/techyian/MMALSharp/issues/154) if you're bored.
 
 ```
 Usage:

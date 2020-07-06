@@ -19,11 +19,6 @@ using System.Threading.Tasks;
 
 namespace pi_cam_test
 {
-    // TODO
-    // verify defaults like MMAL FPS vs FFMPEG command line
-    // implement splitter system
-    // investigate ffmpeg internal MMAL support (noticed in a forum post)
-
     class Program
     {
         private static readonly string outputPath = "/media/ramdisk/";
@@ -126,7 +121,7 @@ namespace pi_cam_test
             cam.ConfigureCameraSettings();
             var stdout = ExternalProcessCaptureHandler.CreateStdOutBuffer();
             using var ffmpeg = new ExternalProcessCaptureHandler("ffmpeg", $"-framerate 24 -i - -b:v 2500k -c copy {pathname}", stdout);
-            // quality arg-help says set bitrate zero to use quality (for VBR), versus setting MMALVideoEncoder.MaxBitrateLevel4 (25MBps)
+            // quality arg-help says set bitrate zero to use quality for VBR
             var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: 0, timeout: null);
             using var encoder = new MMALVideoEncoder();
             using var renderer = new MMALVideoRenderer();
@@ -144,7 +139,6 @@ namespace pi_cam_test
                 ExternalProcessCaptureHandler.EmitStdOutBuffer(stdout, token.Token)
             }).ConfigureAwait(false);
 
-            //Console.WriteLine("cam.Cleanup disabled until exception is explained");
             Console.WriteLine("cam.Cleanup");
             cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
 
@@ -153,10 +147,6 @@ namespace pi_cam_test
 
         static async Task stream(int seconds)
         {
-            // currently only works once, subsequent runs require reboot; errors:
-            // mmal: mmal_vc_component_enable: failed to enable component: ENOSPC
-            // Out of resources. Unable to enable component
-
             var cam = GetConfiguredCamera();
 
             MMALCameraConfig.VideoResolution = new MMALSharp.Common.Utility.Resolution(640, 480);
@@ -168,7 +158,6 @@ namespace pi_cam_test
             var stdout = ExternalProcessCaptureHandler.CreateStdOutBuffer();
             // note cvlc requires real quotes even though we used apostrophes for the command line equivalent
             using var vlc = new ExternalProcessCaptureHandler("cvlc", @"stream:///dev/stdin --sout ""#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=--7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}"" :demux=h264", stdout);
-            // MMALVideoEncoder.MaxBitrateMJPEG = 25MBps
             var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 0, bitrate: MMALVideoEncoder.MaxBitrateMJPEG, timeout: null);
 
             using var encoder = new MMALVideoEncoder();
@@ -188,21 +177,21 @@ namespace pi_cam_test
                 ExternalProcessCaptureHandler.EmitStdOutBuffer(stdout, token.Token)
             }).ConfigureAwait(false);
 
-            Console.WriteLine("cam.Cleanup disabled until exception is explained");
-            //cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
+            Console.WriteLine("cam.Cleanup");
+            cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
 
             Console.WriteLine("Exiting.");
         }
 
-        // https://github.com/techyian/MMALSharp/wiki/Advanced-Examples/93b717ebbf4502f3a6c1ef99137a6b416dd0c3e6#motion-detection---frame-difference
         static async Task motion(int seconds)
         {
-            var h264files = outputPath + "*.h264";
-            var rawfiles = outputPath + "*.raw";
-            File.Delete(h264files);
-            File.Delete(rawfiles);
+            // TODO figure out why file deletion doesn't work for these
+            File.Delete($"{outputPath}*.h264");
+            File.Delete($"{outputPath}*.raw");
             
             var cam = GetConfiguredCamera();
+
+            // The following is basically a direct cut-and-paste from the MMALSharp wiki...
 
             // When using H.264 encoding we require key frames to be generated for the Circular buffer capture handler.
             MMALCameraConfig.InlineHeaders = true;
@@ -262,7 +251,7 @@ namespace pi_cam_test
                     motionCircularBufferCaptureHandler.DisableMotionDetection();
 
                     // Optional, this will begin recording the raw video frames. Produces large video files which will need encoding afterwards.
-                    motionCircularBufferCaptureHandler.StartRecording();
+                    //motionCircularBufferCaptureHandler.StartRecording();
 
                     // Start recording our H.264 video.
                     vidCaptureHandler.StartRecording();
@@ -279,17 +268,17 @@ namespace pi_cam_test
                     motionCircularBufferCaptureHandler.EnableMotionDetection();
 
                     // Stop recording on our capture handlers.
-                    motionCircularBufferCaptureHandler.StopRecording();
+                    //motionCircularBufferCaptureHandler.StopRecording();
                     vidCaptureHandler.StopRecording();
 
                     // Optionally create two new files for our next recording run.
                     vidCaptureHandler.Split();
-                    motionCircularBufferCaptureHandler.Split();
+                    //motionCircularBufferCaptureHandler.Split();
                 })
                 .ProcessAsync(cam.Camera.VideoPort, cts.Token);
 
-            Console.WriteLine("cam.Cleanup disabled until exception is explained");
-            //cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
+            Console.WriteLine("cam.Cleanup");
+            cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
 
             Console.WriteLine("Exiting.");
         }
