@@ -116,7 +116,7 @@ namespace pi_cam_test
                     Console.WriteLine("pi-cam-test -copyperf");
                     Console.WriteLine("pi-cam-test -transcodeperf [local|net]");
                     Console.WriteLine("pi-cam-test -badmp4 [seconds]");
-                    Console.WriteLine("\nAdd -debug to activate MMALSharp verbose debug logging.\nAll files are output to /media/ramdisk.\nMotion detection deletes all RAW and H264 files from the ramdisk.\n");
+                    Console.WriteLine($"\nAdd -debug to activate MMALSharp verbose debug logging.\n\nLocal output: {ramdiskPath}\nNetwork output: {networkPath}\n\nMotion detection deletes all .raw and .h264 files from the ramdisk.\n");
                 }
             }
             catch(Exception ex)
@@ -137,8 +137,7 @@ namespace pi_cam_test
             using var handler = new ImageStreamCaptureHandler(pathname);
             Console.WriteLine($"Capturing JPG: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.JPEG, MMALEncoding.I420).ConfigureAwait(false);
-            Console.WriteLine("cam.Cleanup");
-            cam.Cleanup(); // no exception here, only in mp4 and stream demos...?
+            cam.Cleanup();
             Console.WriteLine("Exiting.");
         }
 
@@ -150,8 +149,7 @@ namespace pi_cam_test
             var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
             Console.WriteLine($"Capturing h.264: {pathname}");
             await cam.TakeVideo(handler, timeout.Token);
-            Console.WriteLine("cam.Cleanup");
-            cam.Cleanup(); // no exception here, only in mp4 and stream demos...?
+            cam.Cleanup();
             Console.WriteLine("Exiting.");
         }
 
@@ -201,7 +199,7 @@ namespace pi_cam_test
             // throws: Argument is invalid. Unable to destroy component
             cam.Cleanup();
 
-            Console.WriteLine("Exiting. Remember video.mp4 is not valid.");
+            Console.WriteLine("Exiting. Remember, video.mp4 is not valid.");
         }
 
         static async Task stream(int seconds)
@@ -219,7 +217,7 @@ namespace pi_cam_test
                 new ExternalProcessCaptureHandlerOptions
                 {
                     Filename = "cvlc",
-                    Arguments = @"stream:///dev/stdin --sout ""#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=--7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}"" :demux=h264",
+                    Arguments = @"stream:///dev/stdin --sout ""#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}"" :demux=h264",
                     EchoOutput = true,
                     DrainOutputDelayMs = 500, // default
                     TerminationSignals = ExternalProcessCaptureHandlerOptions.signalsVLC
@@ -254,10 +252,9 @@ namespace pi_cam_test
 
         static async Task motion(int seconds)
         {
-            // TODO figure out why file deletion doesn't work for these
-            File.Delete($"{ramdiskPath}*.h264");
-            File.Delete($"{ramdiskPath}*.raw");
-            
+            DeleteFiles(ramdiskPath, "*.h264");
+            DeleteFiles(ramdiskPath, "*.raw");
+
             var cam = GetConfiguredCamera();
 
             // The following is basically a direct cut-and-paste from the MMALSharp wiki...
@@ -266,88 +263,91 @@ namespace pi_cam_test
             MMALCameraConfig.InlineHeaders = true;
 
             Console.WriteLine("Preparing pipeline...");
-            // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
-            using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "h264");
-            using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "raw");
-            using var splitter = new MMALSplitterComponent();
-            using var resizer = new MMALIspComponent();
-            using var vidEncoder = new MMALVideoEncoder();
-            using var renderer = new MMALVideoRenderer();
-            cam.ConfigureCameraSettings();
+            using (var splitter = new MMALSplitterComponent())
+            { 
+                // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
+                using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "h264");
+                using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "raw");
+                using var resizer = new MMALIspComponent();
+                using var vidEncoder = new MMALVideoEncoder();
+                using var renderer = new MMALVideoRenderer();
+                cam.ConfigureCameraSettings();
 
-            var splitterPortConfig = new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420, 0, 0, null);
-            var vidEncoderPortConfig = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, 0, MMALVideoEncoder.MaxBitrateLevel4, null);
+                var splitterPortConfig = new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420, 0, 0, null);
+                var vidEncoderPortConfig = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, 0, MMALVideoEncoder.MaxBitrateLevel4, null);
 
-            // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
-            // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
-            var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, 640, 480, 0, 0, 0, false, null);
+                // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
+                // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
+                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, 640, 480, 0, 0, 0, false, null);
 
-            splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
-            splitter.ConfigureOutputPort(0, splitterPortConfig, null);
-            splitter.ConfigureOutputPort(1, splitterPortConfig, null);
+                splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
+                splitter.ConfigureOutputPort(0, splitterPortConfig, null);
+                splitter.ConfigureOutputPort(1, splitterPortConfig, null);
 
-            resizer.ConfigureOutputPort<VideoPort>(0, resizerPortConfig, motionCircularBufferCaptureHandler);
+                resizer.ConfigureOutputPort<VideoPort>(0, resizerPortConfig, motionCircularBufferCaptureHandler);
 
-            vidEncoder.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), splitter.Outputs[1], null);
-            vidEncoder.ConfigureOutputPort(vidEncoderPortConfig, vidCaptureHandler);
+                vidEncoder.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), splitter.Outputs[1], null);
+                vidEncoder.ConfigureOutputPort(vidEncoderPortConfig, vidCaptureHandler);
 
-            cam.Camera.VideoPort.ConnectTo(splitter);
-            cam.Camera.PreviewPort.ConnectTo(renderer);
+                cam.Camera.VideoPort.ConnectTo(splitter);
+                cam.Camera.PreviewPort.ConnectTo(renderer);
 
-            splitter.Outputs[0].ConnectTo(resizer);
-            splitter.Outputs[1].ConnectTo(vidEncoder);
+                splitter.Outputs[0].ConnectTo(resizer);
+                splitter.Outputs[1].ConnectTo(vidEncoder);
 
-            Console.WriteLine("Camera warmup...");
-            await Task.Delay(2000);
+                Console.WriteLine("Camera warmup...");
+                await Task.Delay(2000);
 
-            var cts = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
 
-            // Here we are instructing the capture handler to record for 10 seconds once motion has been detected. A threshold of 130 is used. Lower 
-            // values indicate higher sensitivity. Suitable range for indoor detection between 120-150 with stable lighting conditions.
-            var motionConfig = new MotionConfig(TimeSpan.FromSeconds(10), 130);
+                // Here we are instructing the capture handler to record for 10 seconds once motion has been detected. A threshold of 130 is used. Lower 
+                // values indicate higher sensitivity. Suitable range for indoor detection between 120-150 with stable lighting conditions.
+                var motionConfig = new MotionConfig(TimeSpan.FromSeconds(10), 130);
 
-            Console.WriteLine($"Detecting and recording motion for {seconds} seconds...");
+                Console.WriteLine($"Detecting and recording motion for {seconds} seconds...");
 
-            await cam.WithMotionDetection(
-                motionCircularBufferCaptureHandler, 
-                motionConfig, 
-                () =>
-                {
-                    // This callback will be invoked when motion has been detected.
-                    Console.WriteLine("Motion detected, recording.");
+                await cam.WithMotionDetection(
+                    motionCircularBufferCaptureHandler,
+                    motionConfig,
+                    () =>
+                    {
+                        // This callback will be invoked when motion has been detected.
+                        Console.WriteLine("Motion detected, recording.");
 
-                    // Stop motion detection while we are recording.
-                    motionCircularBufferCaptureHandler.DisableMotionDetection();
+                        // Stop motion detection while we are recording.
+                        motionCircularBufferCaptureHandler.DisableMotionDetection();
 
-                    // Optional, this will begin recording the raw video frames. Produces large video files which will need encoding afterwards.
-                    //motionCircularBufferCaptureHandler.StartRecording();
+                        // Optional, this will begin recording the raw video frames. Produces large video files which will need encoding afterwards.
+                        //motionCircularBufferCaptureHandler.StartRecording();
 
-                    // Start recording our H.264 video.
-                    vidCaptureHandler.StartRecording();
+                        // Start recording our H.264 video.
+                        vidCaptureHandler.StartRecording();
 
-                    // (Optionally) Request a key frame to be immediately generated by the video encoder.
-                    vidEncoder.RequestIFrame();
-                }, 
-                () =>
-                {
-                    // This callback will be invoked when the record duration has passed.
-                    Console.WriteLine("...recording stopped.");
+                        // (Optionally) Request a key frame to be immediately generated by the video encoder.
+                        vidEncoder.RequestIFrame();
+                    },
+                    () =>
+                    {
+                        // This callback will be invoked when the record duration has passed.
+                        Console.WriteLine("...recording stopped.");
 
-                    // We want to re-enable the motion detection.
-                    motionCircularBufferCaptureHandler.EnableMotionDetection();
+                        // We want to re-enable the motion detection.
+                        motionCircularBufferCaptureHandler.EnableMotionDetection();
 
-                    // Stop recording on our capture handlers.
-                    //motionCircularBufferCaptureHandler.StopRecording();
-                    vidCaptureHandler.StopRecording();
+                        // Stop recording on our capture handlers.
+                        //motionCircularBufferCaptureHandler.StopRecording();
+                        vidCaptureHandler.StopRecording();
 
-                    // Optionally create two new files for our next recording run.
-                    vidCaptureHandler.Split();
-                    //motionCircularBufferCaptureHandler.Split();
-                })
-                .ProcessAsync(cam.Camera.VideoPort, cts.Token);
+                        // Optionally create two new files for our next recording run.
+                        vidCaptureHandler.Split();
+                        //motionCircularBufferCaptureHandler.Split();
+                    })
+                    .ProcessAsync(cam.Camera.VideoPort, cts.Token);
+            }
 
-            Console.WriteLine("cam.Cleanup");
-            cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
+            // can't use the convenient fall-through using or MMALCamera.Cleanup
+            // throws: Argument is invalid. Unable to destroy component
+            cam.Cleanup();
 
             Console.WriteLine("Exiting.");
         }
@@ -507,6 +507,14 @@ namespace pi_cam_test
             //MMALCameraConfig.ColourFx = new ColourEffects(true, Color.FromArgb(128, 128, 128));
 
             return cam;
+        }
+
+        static void DeleteFiles(string path, string filespec)
+        {
+            foreach (string fp in Directory.EnumerateFiles(path, filespec))
+            {
+                File.Delete(fp);
+            }
         }
     }
 }
