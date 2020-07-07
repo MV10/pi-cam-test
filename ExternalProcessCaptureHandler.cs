@@ -6,25 +6,21 @@ using System.Threading.Channels;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using MMALSharp.Common;
+using MMALSharp.Common.Utility;
+using Mono.Unix.Native;
 
 namespace MMALSharp.Handlers
 {
     /// <summary>
-    /// This is a variation on the MMALSharp project's FFmpegCaptureHandler.
-    ///
-    /// It omits the stream and AVI helper methods, which my projects will never use,
-    /// it adds channel buffering of stdout console output, and it accepts arbitrary
-    /// process names.
-    ///
-    /// It also properly diposes the Process object but it appears Dispose isn't
-    /// called somewhere further up the pipeline.
-    ///
-    /// See https://github.com/techyian/MMALSharp/issues/154
+    /// This is a generalized variation on the MMALSharp project's FFmpegCaptureHandler.
+    /// It adds channel-based async buffering of console output and options to properly
+    /// terminate the child process through signals (SIGINT, SIGQUIT, etc.)
     /// </summary>
     public class ExternalProcessCaptureHandler : IVideoCaptureHandler
     {
-        private Process _process;
-        private Channel<string> _outputBuffer;
+        private readonly ExternalProcessCaptureHandlerOptions _options;
+        private readonly Process _process;
+        private readonly Channel<string> _stdoutBuffer;
 
         /// <summary>
         /// The total size of data that has been processed by this capture handler.
@@ -32,23 +28,31 @@ namespace MMALSharp.Handlers
         protected int Processed { get; set; }
 
         /// <summary>
-        /// Convenience method for creating the Channel used to buffer console output. Pass
-        /// this to the constructor, then await Task.WhenAll for both MMALCamera.ProcessAsync
-        /// and EmitStdOutBuffer.
+        /// Creates a new instance of <see cref="ExternalProcessCaptureHandler"/> with the specified options.
         /// </summary>
-        /// <returns>A new unbounded Channel object.</returns>
-        public static Channel<string> CreateStdOutBuffer()
-            => Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
-
-        /// <summary>
-        /// Creates a new instance of <see cref="ExternalProcessCaptureHandler"/> with the specified process arguments.
-        /// </summary>
-        /// <param name="processFilename">The process to receive the capture stream, such as "ffmpeg" or "cvlc"</param>
-        /// <param name="argument">The <see cref="ProcessStartInfo"/> argument.</param>
-        /// <param name="stdoutBuffer">Console output, <see cref="CreateStdOutBuffer"/>; if null, console output will be suppressed.</param>
-        public ExternalProcessCaptureHandler(string processFilename, string argument, Channel<string> stdoutBuffer = null)
+        public ExternalProcessCaptureHandler(ExternalProcessCaptureHandlerOptions options)
         {
-            _outputBuffer = stdoutBuffer;
+            if(MMALLog.Logger != null)
+            {
+                MMALLog.Logger.LogTrace("Starting ExternalProcessCaptureHandler");
+                MMALLog.Logger.LogTrace($"  File: {options.Filename}");
+                MMALLog.Logger.LogTrace($"  Args: {options.Arguments}");
+                if(options.TerminationSignals.Length == 0)
+                {
+                    MMALLog.Logger.LogTrace($"  Signal count: 0 (process will be killed upon Dispose)");
+                }
+                else
+                {
+                    MMALLog.Logger.LogTrace($"  Signal count: {options.TerminationSignals.Length}");
+                }
+            }
+
+            _options = options;
+
+            if(options.EchoOutput)
+            {
+                _stdoutBuffer = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
+            }
 
             var processStartInfo = new ProcessStartInfo
             {
@@ -57,8 +61,8 @@ namespace MMALSharp.Handlers
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true,
-                FileName = processFilename,
-                Arguments = argument
+                FileName = options.Filename,
+                Arguments = options.Arguments
             };
 
             _process = new Process();
@@ -67,8 +71,16 @@ namespace MMALSharp.Handlers
             Console.InputEncoding = Encoding.ASCII;
 
             _process.EnableRaisingEvents = true;
-            _process.OutputDataReceived += WriteToStdOut;
-            _process.ErrorDataReceived += WriteToStdOut;
+            if(options.EchoOutput)
+            {
+                _process.OutputDataReceived += WriteToBuffer;
+                _process.ErrorDataReceived += WriteToBuffer;
+            }
+            else
+            {
+                _process.OutputDataReceived += DiscardBuffer;
+                _process.ErrorDataReceived += DiscardBuffer;
+            }
 
             _process.Start();
 
@@ -80,33 +92,22 @@ namespace MMALSharp.Handlers
         // result of an operation to some external "observer" -- but by definition the caller that fires
         // an event doesn't care about the result of the operation. The only caveat is that you get no
         // exception handling; an unhandled exception would terminate the process.
-        private async void WriteToStdOut(object sendingProcess, DataReceivedEventArgs e)
+        private async void WriteToBuffer(object sendingProcess, DataReceivedEventArgs e)
         {
             try
             {
-                if (_outputBuffer != null && e.Data != null)
-                    await _outputBuffer.Writer.WriteAsync(e.Data).ConfigureAwait(false);
+                // Technically the faster TryWrite method is guaranteed to work for an
+                // unbounded channel, but in this case non-blocking async is more important.
+                if (_stdoutBuffer != null && e.Data != null)
+                    await _stdoutBuffer.Writer.WriteAsync(e.Data);
             }
             catch
             { }
         }
 
-        /// <summary>
-        /// When console output is buffered, this asynchronously read/writes the buffer contents
-        /// without blocking ffmpeg, as a raw Console.WriteLine would in response to process output.
-        /// </summary>
-        public static async Task EmitStdOutBuffer(Channel<string> stdoutBuffer, CancellationToken cancellationToken)
-        {
-            try
-            {
-                while (await stdoutBuffer.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
-                    Console.WriteLine(await stdoutBuffer.Reader.ReadAsync().ConfigureAwait(false));
-            }
-            catch(OperationCanceledException)
-            {
-                // token cancellation, disregard
-            }
-        }
+        // Used when output is not echoed; the Process class requires that stdout/stderr be received.
+        private void DiscardBuffer(object sendingProcess, DataReceivedEventArgs e)
+        { }
 
         /// <summary>
         /// Returns whether this capture handler features the split file functionality.
@@ -174,19 +175,99 @@ namespace MMALSharp.Handlers
             return $"{this.Processed}";
         }
 
+        /// <summary>
+        /// Manages echoing the output buffer and handles attempts to cleanly terminate the
+        /// child process. Use the same CancellationToken passed to MMALCamera.ProcessAsync
+        /// and execute both of these with Task.WhenAll.
+        /// </summary>
+        /// <param name="cancellationToken">The same timeout token used for MMALCamera.ProcessAsync</param>
+        /// <returns></returns>
+        public async Task ManageProcessLifecycleAsync(CancellationToken cancellationToken)
+        {
+            var outputToken = new CancellationTokenSource();
+            
+            await Task.WhenAny(new[]
+            {
+                // this Task is the one that will be cancelled by the ProcessAsync timeout
+                WaitForCancellationAsync(cancellationToken),
+
+                // we control this token so this will keep running when the above completes
+                ConsoleWriteLineAsync(outputToken.Token)
+            });
+
+            // now we can do a clean shutdown; ConsoleWriteLineAsync is still running
+            if (_options.TerminationSignals.Length > 0)
+            {
+                MMALLog.Logger?.LogTrace($"Sending process termination signals");
+                foreach (var sigint in _options.TerminationSignals)
+                {
+                    if (_process.HasExited) break;
+                    Syscall.kill(_process.Id, sigint);
+                }
+            }
+
+            // gives output buffer a chance to drain, and also allows the process to do exit-cleanup
+            var stopwatch = new Stopwatch();
+            stopwatch.Start();
+            while (!_process.HasExited && stopwatch.ElapsedMilliseconds < _options.DrainOutputDelayMs)
+                await Task.Delay(50);
+
+            MMALLog.Logger?.LogTrace($"Process exited? {_process.HasExited}");
+
+            // now we terminate ConsoleWriteLineAsync
+            outputToken.Cancel();
+        }
+
+        private async Task WaitForCancellationAsync(CancellationToken cancellationToken)
+        {
+            // https://github.com/dotnet/runtime/issues/14991#issuecomment-388776983
+            TaskCompletionSource<bool> taskCompletionSource = new TaskCompletionSource<bool>();
+            using (cancellationToken.Register(() => 
+            {
+                    taskCompletionSource.TrySetResult(true);
+            }))
+            {
+                await taskCompletionSource.Task;
+            }
+        }
+
+        // When console output is buffered, this asynchronously outputs the buffer without
+        // blocking the Process, unlike immediate inline calls to Console.WriteLine.
+        private async Task ConsoleWriteLineAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                if(_options.EchoOutput)
+                {
+                    while (await _stdoutBuffer.Reader.WaitToReadAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        var data = await _stdoutBuffer.Reader.ReadAsync();
+                        Console.WriteLine(data);
+                        MMALLog.Logger?.LogTrace(data);
+                    }
+                }
+                else
+                {
+                    await WaitForCancellationAsync(cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            { } // token cancellation, disregard
+        }
+
         /// <inheritdoc />
         public void Dispose()
         {
-            if (Common.Utility.MMALLog.Logger != null) 
-                Common.Utility.MMALLog.Logger.LogTrace("Disposing ExternalProcessCaptureHandler");
-
             if (!_process.HasExited)
             {
+                MMALLog.Logger?.LogTrace($"Killing PID: {_process.Id}");
                 _process.Kill();
             }
 
-            _process.Close();
+            MMALLog.Logger?.LogTrace($"Disposing PID: {_process.Id}");
             _process.Dispose();
+
+            MMALLog.Logger?.LogTrace("Disposed ExternalProcessCaptureHandler");
         }
     }
 }
