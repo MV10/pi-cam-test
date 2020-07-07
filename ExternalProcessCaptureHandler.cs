@@ -113,7 +113,8 @@ namespace MMALSharp.Handlers
         /// Returns whether this capture handler features the split file functionality.
         /// </summary>
         /// <returns>True if can split.</returns>
-        public bool CanSplit() => false;
+        public bool CanSplit() 
+            => false;
 
         /// <summary>
         /// Not used.
@@ -139,7 +140,7 @@ namespace MMALSharp.Handlers
             => throw new NotImplementedException();
 
         /// <summary>
-        /// Writes frame data to the StandardInput stream to be processed by FFmpeg.
+        /// Writes frame data to the StandardInput stream for processing.
         /// </summary>
         /// <param name="context">Contains the data and metadata for an image frame.</param>
         public void Process(ImageContext context)
@@ -191,7 +192,7 @@ namespace MMALSharp.Handlers
                 // this Task is the one that will be cancelled by the ProcessAsync timeout
                 WaitForCancellationAsync(cancellationToken),
 
-                // we control this token so this will keep running when the above completes
+                // we control this token so this will keep running when the above expires
                 ConsoleWriteLineAsync(outputToken.Token)
             });
 

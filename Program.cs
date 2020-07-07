@@ -22,7 +22,8 @@ namespace pi_cam_test
 {
     class Program
     {
-        private static readonly string outputPath = "/media/ramdisk/";
+        private static readonly string ramdiskPath = "/media/ramdisk/";
+        private static readonly string networkPath = "/media/nas_dvr/smartcam/";
 
         private static bool useDebug = false;
 
@@ -52,19 +53,19 @@ namespace pi_cam_test
                             await jpg();
                             break;
 
-                        case "-badmp4":
-                            if (hasSeconds)
-                            {
-                                showHelp = false;
-                                await broken_mp4(seconds);
-                            }
-                            break;
-
                         case "-stream":
                             if (hasSeconds)
                             {
                                 showHelp = false;
                                 await stream(seconds);
+                            }
+                            break;
+
+                        case "-h264":
+                            if (hasSeconds)
+                            {
+                                showHelp = false;
+                                await h264(seconds);
                             }
                             break;
 
@@ -80,6 +81,28 @@ namespace pi_cam_test
                             showHelp = false;
                             copyperf();
                             break;
+
+                        case "-transcodeperf":
+                            if (args.Length != 2) break;
+                            if(args[1].ToLower() == "local")
+                            {
+                                showHelp = false;
+                                transcodeperf(ramdiskPath);
+                            }
+                            if (args[1].ToLower() == "net")
+                            {
+                                showHelp = false;
+                                transcodeperf(networkPath);
+                            }
+                            break;
+
+                        case "-badmp4":
+                            if (hasSeconds)
+                            {
+                                showHelp = false;
+                                await badmp4(seconds);
+                            }
+                            break;
                     }
                 }
 
@@ -87,9 +110,11 @@ namespace pi_cam_test
                 {
                     Console.WriteLine("Usage:\n");
                     Console.WriteLine("pi-cam-test -jpg");
+                    Console.WriteLine("pi-cam-test -h264 [seconds]");
                     Console.WriteLine("pi-cam-test -stream [seconds]");
                     Console.WriteLine("pi-cam-test -motion [seconds]");
                     Console.WriteLine("pi-cam-test -copyperf");
+                    Console.WriteLine("pi-cam-test -transcodeperf [local|net]");
                     Console.WriteLine("pi-cam-test -badmp4 [seconds]");
                     Console.WriteLine("\nAdd -debug to activate MMALSharp verbose debug logging.\nAll files are output to /media/ramdisk.\nMotion detection deletes all RAW and H264 files from the ramdisk.\n");
                 }
@@ -108,31 +133,42 @@ namespace pi_cam_test
         static async Task jpg()
         {
             var cam = GetConfiguredCamera();
-            var pathname = outputPath + "snapshot.jpg";
+            var pathname = ramdiskPath + "snapshot.jpg";
             using var handler = new ImageStreamCaptureHandler(pathname);
             Console.WriteLine($"Capturing JPG: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.JPEG, MMALEncoding.I420).ConfigureAwait(false);
-
             Console.WriteLine("cam.Cleanup");
             cam.Cleanup(); // no exception here, only in mp4 and stream demos...?
-
             Console.WriteLine("Exiting.");
         }
 
-        static async Task broken_mp4(int seconds)
+        static async Task h264(int seconds)
         {
-            Console.WriteLine("\n\nffmpeg can't create a valid MP4 as a child process.\nSee repository README. This code is here for reference only.\n\nPress any key...");
+            var cam = GetConfiguredCamera();
+            var pathname = ramdiskPath + "capture.h264";
+            using var handler = new VideoStreamCaptureHandler(pathname);
+            var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+            Console.WriteLine($"Capturing h.264: {pathname}");
+            await cam.TakeVideo(handler, timeout.Token);
+            Console.WriteLine("cam.Cleanup");
+            cam.Cleanup(); // no exception here, only in mp4 and stream demos...?
+            Console.WriteLine("Exiting.");
+        }
+
+        static async Task badmp4(int seconds)
+        {
+            Console.WriteLine("\n\nWARNING:\nffmpeg can't create a valid MP4 when running as a child process.\nSee repository README. This code is here for reference only.\n\nPress any key...");
             Console.ReadKey(true);
 
             var cam = GetConfiguredCamera();
-            var pathname = outputPath + "video.mp4";
-            Directory.CreateDirectory(outputPath);
+            var pathname = ramdiskPath + "video.mp4";
+            Directory.CreateDirectory(ramdiskPath);
             File.Delete(pathname);
 
             Console.WriteLine("Preparing pipeline...");
             cam.ConfigureCameraSettings();
 
-            using var ffmpeg = new ExternalProcessCaptureHandler(
+            using (var ffmpeg = new ExternalProcessCaptureHandler(
                 new ExternalProcessCaptureHandlerOptions
                 {
                     Filename = "ffmpeg",
@@ -140,31 +176,32 @@ namespace pi_cam_test
                     EchoOutput = true,
                     DrainOutputDelayMs = 500, // default
                     TerminationSignals = new[] { Signum.SIGINT, Signum.SIGQUIT }, // not the supposedly-correct SIGINT+SIGINT but this produces some exit output
-                });
-            //using var ffmpeg = new ExternalProcessCaptureHandler("ffmpeg", $"-framerate 24 -i - -b:v 2500k -c copy -movflags +faststart {pathname}", stdout);
+                }))
+            {
+                // quality arg-help says set bitrate zero to use quality for VBR
+                var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: 0, timeout: null);
+                using var encoder = new MMALVideoEncoder();
+                using var renderer = new MMALVideoRenderer();
+                encoder.ConfigureOutputPort(portCfg, ffmpeg);
+                cam.Camera.VideoPort.ConnectTo(encoder);
+                cam.Camera.PreviewPort.ConnectTo(renderer);
 
-            // quality arg-help says set bitrate zero to use quality for VBR
-            var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: 0, timeout: null);
-            using var encoder = new MMALVideoEncoder();
-            using var renderer = new MMALVideoRenderer();
-            encoder.ConfigureOutputPort(portCfg, ffmpeg);
-            cam.Camera.VideoPort.ConnectTo(encoder);
-            cam.Camera.PreviewPort.ConnectTo(renderer);
+                Console.WriteLine("Camera warmup...");
+                await Task.Delay(2000);
 
-            Console.WriteLine("Camera warmup...");
-            await Task.Delay(2000);
+                Console.WriteLine($"Capturing MP4: {pathname}");
+                var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                await Task.WhenAll(new Task[]{
+                    ffmpeg.ManageProcessLifecycleAsync(timerToken.Token),
+                    cam.ProcessAsync(cam.Camera.VideoPort, timerToken.Token),
+                }).ConfigureAwait(false);
+            }
 
-            Console.WriteLine($"Capturing MP4: {pathname}");
-            var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
-            await Task.WhenAll(new Task[]{
-                ffmpeg.ManageProcessLifecycleAsync(timerToken.Token),
-                cam.ProcessAsync(cam.Camera.VideoPort, timerToken.Token),
-            }).ConfigureAwait(false);
+            // can't use the convenient fall-through using or MMALCamera.Cleanup
+            // throws: Argument is invalid. Unable to destroy component
+            cam.Cleanup();
 
-            Console.WriteLine("cam.Cleanup");
-            cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
-
-            Console.WriteLine("Exiting.");
+            Console.WriteLine("Exiting. Remember video.mp4 is not valid.");
         }
 
         static async Task stream(int seconds)
@@ -178,7 +215,7 @@ namespace pi_cam_test
             Console.WriteLine("Preparing pipeline...");
             cam.ConfigureCameraSettings();
             // note cvlc requires real quotes even though we used apostrophes for the command line equivalent
-            using var vlc = new ExternalProcessCaptureHandler(
+            using (var vlc = new ExternalProcessCaptureHandler(
                 new ExternalProcessCaptureHandlerOptions
                 {
                     Filename = "cvlc",
@@ -186,28 +223,31 @@ namespace pi_cam_test
                     EchoOutput = true,
                     DrainOutputDelayMs = 500, // default
                     TerminationSignals = ExternalProcessCaptureHandlerOptions.signalsVLC
-                });
-            var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 0, bitrate: MMALVideoEncoder.MaxBitrateMJPEG, timeout: null);
+                }))
+            {
+                var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 0, bitrate: MMALVideoEncoder.MaxBitrateMJPEG, timeout: null);
 
-            using var encoder = new MMALVideoEncoder();
-            using var renderer = new MMALVideoRenderer();
-            encoder.ConfigureOutputPort(portCfg, vlc);
-            cam.Camera.VideoPort.ConnectTo(encoder);
-            cam.Camera.PreviewPort.ConnectTo(renderer);
+                using var encoder = new MMALVideoEncoder();
+                using var renderer = new MMALVideoRenderer();
+                encoder.ConfigureOutputPort(portCfg, vlc);
+                cam.Camera.VideoPort.ConnectTo(encoder);
+                cam.Camera.PreviewPort.ConnectTo(renderer);
 
-            Console.WriteLine("Camera warmup...");
-            await Task.Delay(2000);
+                Console.WriteLine("Camera warmup...");
+                await Task.Delay(2000);
 
-            Console.WriteLine($"Streaming MJPEG for {seconds} sec to:");
-            Console.WriteLine($"http://{Environment.MachineName}.local:8554/");
-            var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
-            await Task.WhenAll(new Task[]{
-                vlc.ManageProcessLifecycleAsync(timeout.Token),
-                cam.ProcessAsync(cam.Camera.VideoPort, timeout.Token),
-            }).ConfigureAwait(false);
+                Console.WriteLine($"Streaming MJPEG for {seconds} sec to:");
+                Console.WriteLine($"http://{Environment.MachineName}.local:8554/");
+                var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                await Task.WhenAll(new Task[]{
+                    vlc.ManageProcessLifecycleAsync(timeout.Token),
+                    cam.ProcessAsync(cam.Camera.VideoPort, timeout.Token),
+                }).ConfigureAwait(false);
+            }
 
-            Console.WriteLine("cam.Cleanup");
-            cam.Cleanup(); // throws: Argument is invalid. Unable to destroy component
+            // can't use the convenient fall-through using or MMALCamera.Cleanup
+            // throws: Argument is invalid. Unable to destroy component
+            cam.Cleanup();
 
             Console.WriteLine("Exiting.");
         }
@@ -215,8 +255,8 @@ namespace pi_cam_test
         static async Task motion(int seconds)
         {
             // TODO figure out why file deletion doesn't work for these
-            File.Delete($"{outputPath}*.h264");
-            File.Delete($"{outputPath}*.raw");
+            File.Delete($"{ramdiskPath}*.h264");
+            File.Delete($"{ramdiskPath}*.raw");
             
             var cam = GetConfiguredCamera();
 
@@ -314,14 +354,14 @@ namespace pi_cam_test
 
         static void copyperf()
         {
-            var source = outputPath + "video.mp4";
+            var source = ramdiskPath + "video.mp4";
             if(!File.Exists(source))
             {
-                Console.WriteLine("Create an MP4 recording on the ramdisk to check file-copy performance to the NAS.");
+                Console.WriteLine("Create a video.mp4 recording on the ramdisk to check file-copy performance to the NAS.");
                 return;
             }
 
-            var dest = "/media/nas_dvr/smartcam/video.mp4";
+            var dest = networkPath + "video.mp4";
             File.Delete(dest);
 
             var fi = new FileInfo(source);
@@ -344,6 +384,74 @@ namespace pi_cam_test
             else
             {
                 Console.WriteLine("File-sizes match.");
+            }
+
+            Console.WriteLine("Exiting.");
+        }
+
+        static void transcodeperf(string targetPath)
+        {
+            var source = ramdiskPath + "capture.h264";
+            if (!File.Exists(source))
+            {
+                Console.WriteLine("Create a capture.h264 recording on the ramdisk to check transcoding performance.");
+                return;
+            }
+
+            var dest = targetPath + "video.mp4";
+            File.Delete(dest);
+
+            // We don't need the complexity of output buffering (as seen in ExternalProcessCaptureHandler)
+            // because the input is a file, there is no chance of dropped frames. The async buffering would
+            // improve performance mildly but in my real app this will be a background process, mostly I want
+            // to compare local to network performance.
+
+            Console.WriteLine($"Transcoding:\n  src : {source}\n  dest: {dest}");
+
+            var processStartInfo = new ProcessStartInfo
+            {
+                UseShellExecute = false,
+                RedirectStandardInput = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+                FileName = "ffmpeg",
+                Arguments = $"-framerate 24 -i {source} -b:v 2500k -c copy -movflags +faststart {dest}"
+            };
+
+            var process = new Process();
+            process.StartInfo = processStartInfo;
+
+            process.EnableRaisingEvents = true;
+            process.OutputDataReceived += 
+                (object sendingProcess, DataReceivedEventArgs e) =>
+                {
+                    if (e.Data != null) Console.WriteLine(e.Data);
+                };
+            process.ErrorDataReceived +=
+                (object sendingProcess, DataReceivedEventArgs e) =>
+                {
+                    if (e.Data != null) Console.WriteLine(e.Data);
+                };
+
+            var timer = new Stopwatch();
+            timer.Start();
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            process.WaitForExit();
+            timer.Stop();
+            process.Dispose();
+
+            if(File.Exists(dest))
+            {
+                var fi = new FileInfo(dest);
+                Console.WriteLine($"{fi.Length:#,#} bytes written to {dest}");
+                Console.WriteLine($"Time to transcode: {timer.Elapsed:hh\\:mm\\:ss}\n\n");
+            }
+            else
+            {
+                Console.WriteLine($"Failed to create {dest}");
             }
 
             Console.WriteLine("Exiting.");
