@@ -24,6 +24,7 @@ namespace pi_cam_test
     {
         private static readonly string ramdiskPath = "/media/ramdisk/";
         private static readonly string networkPath = "/media/nas_dvr/smartcam/";
+        private static readonly string sdcardPath = "/home/pi/";
 
         private static bool useDebug = false;
 
@@ -84,12 +85,17 @@ namespace pi_cam_test
 
                         case "-transcodeperf":
                             if (args.Length != 2) break;
-                            if(args[1].ToLower() == "local")
+                            if(args[1].ToLower() == "ram")
                             {
                                 showHelp = false;
                                 transcodeperf(ramdiskPath);
                             }
-                            if (args[1].ToLower() == "net")
+                            if (args[1].ToLower() == "sd")
+                            {
+                                showHelp = false;
+                                transcodeperf(sdcardPath);
+                            }
+                            if (args[1].ToLower() == "lan")
                             {
                                 showHelp = false;
                                 transcodeperf(networkPath);
@@ -114,7 +120,7 @@ namespace pi_cam_test
                     Console.WriteLine("pi-cam-test -stream [seconds]");
                     Console.WriteLine("pi-cam-test -motion [seconds]");
                     Console.WriteLine("pi-cam-test -copyperf");
-                    Console.WriteLine("pi-cam-test -transcodeperf [local|net]");
+                    Console.WriteLine("pi-cam-test -transcodeperf [ram|sd|lan]");
                     Console.WriteLine("pi-cam-test -badmp4 [seconds]");
                     Console.WriteLine($"\nAdd -debug to activate MMALSharp verbose debug logging.\n\nLocal output: {ramdiskPath}\nNetwork output: {networkPath}\n\nMotion detection deletes all .raw and .h264 files from the ramdisk.\n");
                 }
@@ -264,7 +270,7 @@ namespace pi_cam_test
 
             Console.WriteLine("Preparing pipeline...");
             using (var splitter = new MMALSplitterComponent())
-            { 
+            {
                 // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
                 using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "h264");
                 using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "raw");
@@ -416,7 +422,10 @@ namespace pi_cam_test
                 RedirectStandardError = true,
                 CreateNoWindow = true,
                 FileName = "ffmpeg",
-                Arguments = $"-framerate 24 -i {source} -b:v 2500k -c copy -movflags +faststart {dest}"
+                
+                // see README about the faststart option
+                Arguments = $"-framerate 24 -i {source} -b:v 2500k -c copy -movflags -faststart {dest}", 
+                //Arguments = $"-framerate 24 -i {source} -b:v 2500k -c copy -movflags +faststart {dest}",
             };
 
             var process = new Process();
