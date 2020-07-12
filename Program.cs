@@ -102,6 +102,14 @@ namespace pi_cam_test
                             }
                             break;
 
+                        case "-fragmp4":
+                            if (hasSeconds)
+                            {
+                                showHelp = false;
+                                await fragmp4(seconds);
+                            }
+                            break;
+
                         case "-badmp4":
                             if (hasSeconds)
                             {
@@ -116,6 +124,7 @@ namespace pi_cam_test
                 {
                     Console.WriteLine("Usage:\n");
                     Console.WriteLine("pi-cam-test -jpg");
+                    Console.WriteLine("pi-cam-test -fragmp4 [seconds]");
                     Console.WriteLine("pi-cam-test -h264 [seconds]");
                     Console.WriteLine("pi-cam-test -stream [seconds]");
                     Console.WriteLine("pi-cam-test -motion [seconds]");
@@ -144,6 +153,64 @@ namespace pi_cam_test
             Console.WriteLine($"Capturing JPG: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.JPEG, MMALEncoding.I420).ConfigureAwait(false);
             cam.Cleanup();
+            Console.WriteLine("Exiting.");
+        }
+
+        static async Task fragmp4(int seconds)
+        {
+            // This generates a "fragmented" MP4 which should be larger than an MP4
+            // with a normal single MOOV atom trailer at the end of the file. See:
+            // https://superuser.com/a/1530949/143047
+            // 10 seconds of "-badmp4" is 34MB
+            // 10 seconds of "-fragmp4" is 26MB regardless of the other options described in the link
+            // 60 seconds (bad) is 219MB versus 208MB (frag) and again we lose 2 seconds
+            // -g is keyframe rate, default is 250
+            // -flush_packets 1 flushes the I/O stream after each packet, decreasing latency (apparently)
+            // adding two seconds to the requested duration approximates the regular file size (10s = 33MB, 60s = 218MB)
+
+            seconds += 2; // HACK! see above
+
+            var cam = GetConfiguredCamera();
+            var pathname = ramdiskPath + "video.mp4";
+            Directory.CreateDirectory(ramdiskPath);
+            File.Delete(pathname);
+
+            Console.WriteLine("Preparing pipeline...");
+            cam.ConfigureCameraSettings();
+
+            using (var ffmpeg = new ExternalProcessCaptureHandler(
+                new ExternalProcessCaptureHandlerOptions
+                {
+                    Filename = "ffmpeg",
+                    Arguments = $"-framerate 24 -i - -b:v 2500k -c copy -movflags +frag_keyframe+separate_moof+omit_tfhd_offset+empty_moov {pathname}",
+                    EchoOutput = true,
+                    DrainOutputDelayMs = 500, // default
+                    TerminationSignals = new[] { Signum.SIGINT, Signum.SIGQUIT }, // not the supposedly-correct SIGINT+SIGINT but this produces some exit output
+                }))
+            {
+                // quality arg-help says set bitrate zero to use quality for VBR
+                var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: 0, timeout: null);
+                using var encoder = new MMALVideoEncoder();
+                using var renderer = new MMALVideoRenderer();
+                encoder.ConfigureOutputPort(portCfg, ffmpeg);
+                cam.Camera.VideoPort.ConnectTo(encoder);
+                cam.Camera.PreviewPort.ConnectTo(renderer);
+
+                Console.WriteLine("Camera warmup...");
+                await Task.Delay(2000);
+
+                Console.WriteLine($"Capturing MP4: {pathname}");
+                var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                await Task.WhenAll(new Task[]{
+                    ffmpeg.ManageProcessLifecycleAsync(timerToken.Token),
+                    cam.ProcessAsync(cam.Camera.VideoPort, timerToken.Token),
+                }).ConfigureAwait(false);
+            }
+
+            // can't use the convenient fall-through using or MMALCamera.Cleanup
+            // throws: Argument is invalid. Unable to destroy component
+            cam.Cleanup();
+
             Console.WriteLine("Exiting.");
         }
 

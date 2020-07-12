@@ -12,6 +12,7 @@ pi-cam-test -stream [seconds]
 pi-cam-test -motion [seconds]
 pi-cam-test -copyperf
 pi-cam-test -transcodeperf [ram|sd|lan]
+pi-cam-test -fragmp4 [seconds]
 pi-cam-test -badmp4 [seconds]
 
 Add "-debug" for verbose logging (from MMALSharp).
@@ -34,6 +35,8 @@ Motion-detection requires the GDI+ library:
 Since this writes to ramdisk, keep in mind motion-detection can quickly produce very large files. I'm using a 1GB ramdisk and the .raw files fill that up after just 60 seconds or so with just four motion-detection events (saving the .raw files is now disabled).
 
 MP4 generation is broken (hence the switch name -badmp4) -- it's an old, well-known ffmpeg problem, it won't do a clean shutdown when running as a child process so it fails to output the trailing-header (a structure called the MOOV atom, described as the "table of contents" of the file). This led to adding "correct" process termination support by sending Unix sigint signals, but that didn't fix it. More details in comments in the code.
+
+The other MP4 option, -fragmp4, produces a "fragmented" MP4 which means it dumps keyframes a lot more often. Supposedly it should produce a larger file, but it does not -- I think because the final buffer isn't being written. It's actually a smaller file than the broken MP4, but also truncated -- a 10 second timeout produces 8 seconds of video. Regardless, it's not really correct either, but the code is hacked to add 2 seconds to the requested time to account for this. It seems independent of the requested duration.
 
 Apart from just learning the MMALSharp library, this project was also used to test some ideas and scenarios in preparation for my [smartcam](https://github.com/MV10/smartcam) project.
 
