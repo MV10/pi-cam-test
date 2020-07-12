@@ -12,9 +12,9 @@ using Mono.Unix.Native;
 namespace MMALSharp.Handlers
 {
     /// <summary>
-    /// This is a generalized variation on the MMALSharp project's FFmpegCaptureHandler.
-    /// It adds channel-based async buffering of console output and options to properly
-    /// terminate the child process through signals (SIGINT, SIGQUIT, etc.)
+    /// This handler is a general-purpose manager for external processes like ffmpeg and VLC.
+    /// It uses Channel-based async buffering of console output, and supports options to properly
+    /// terminate the child process through one or more signals (SIGINT, SIGQUIT, etc.).
     /// </summary>
     public class ExternalProcessCaptureHandler : IVideoCaptureHandler
     {

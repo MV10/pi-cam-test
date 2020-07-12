@@ -2,6 +2,9 @@
 
 namespace MMALSharp.Handlers
 {
+    /// <summary>
+    /// Options to pass to the constructor of <see cref="ExternalProcessCaptureHandler"/>.
+    /// </summary>
     public class ExternalProcessCaptureHandlerOptions
     {
         /// <summary>
@@ -16,8 +19,8 @@ namespace MMALSharp.Handlers
 
         /// <summary>
         /// When true, stdout and stderr data is asynchronously buffered and output. When false, output is
-        /// completely suppressed, which may improve release-build performance. Must be true to capture
-        /// output in the MMAL verbose debug log.
+        /// completely suppressed, which may improve release-build performance. If true and MMAL is also
+        /// configured for logging, process output will also be logged.
         /// </summary>
         public bool EchoOutput = true;
 
@@ -35,7 +38,7 @@ namespace MMALSharp.Handlers
         public Signum[] TerminationSignals = new Signum[]{ };
 
         /// <summary>
-        /// In theory, ffmpeg responds to a series of SIGINT signals with a clean shutdown, although in
+        /// In theory, ffmpeg responds to a pair of SIGINT signals with a clean shutdown, although in
         /// practice this doesn't appear to work when ffmpeg is running as a child process.
         /// </summary>
         public static Signum[] signalsFFmpeg = new[] { Signum.SIGINT, Signum.SIGINT };
@@ -45,16 +48,13 @@ namespace MMALSharp.Handlers
         /// </summary>
         public static Signum[] signalsVLC = new[] { Signum.SIGINT };
 
-        // With ffmpeg, these combinations all result in a corrupt an MP4 file (missing end-header MOOV atom).
+        // With ffmpeg realtime transcoding, the following combinations are all likely to result in
+        // a corrupt video file (for example, MP4 encoding will be missing the end-header MOOV atom).
         // Testing also shows it doesn't help to delay between sending the signals.
         //
         // SIGINT followed by:
-        //
-        // SIGINT, SIGABRT, SIGALRM, SIGBUS, SIGTERM, SIGHUP
-        // immediate stop, no output
-        //
-        // SIGQUIT
-        // only one with output; stops, tries to write trailer (MOOV atom), aborts
+        //    SIGINT, SIGABRT, SIGALRM, SIGBUS, SIGTERM, SIGHUP - immediate stop, no output of any kind
+        //    SIGQUIT - ouputs a message, tries to write trailer (MOOV atom), aborts
         //
         // VLC signals documented here:
         // https://wiki.videolan.org/Hacker_Guide/Interfaces/#A_typical_VLC_run_course
