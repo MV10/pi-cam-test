@@ -286,9 +286,9 @@ namespace pi_cam_test
         {
             var cam = GetConfiguredCamera();
 
-            MMALCameraConfig.VideoResolution = new MMALSharp.Common.Utility.Resolution(640, 480);
+            MMALCameraConfig.Resolution = new Resolution(640, 480);
             MMALCameraConfig.SensorMode = MMALSensorMode.Mode7; // for some reason mode 6 has a pinkish tinge
-            MMALCameraConfig.VideoFramerate = new MMAL_RATIONAL_T(20, 1);
+            MMALCameraConfig.Framerate = new MMAL_RATIONAL_T(20, 1);
 
             Console.WriteLine("Preparing pipeline...");
             cam.ConfigureCameraSettings();
@@ -300,7 +300,7 @@ namespace pi_cam_test
                     Arguments = @"stream:///dev/stdin --sout ""#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}"" :demux=h264",
                     EchoOutput = true,
                     DrainOutputDelayMs = 500, // default
-                    TerminationSignals = ExternalProcessCaptureHandlerOptions.signalsVLC
+                    TerminationSignals = ExternalProcessCaptureHandlerOptions.SignalsVLC
                 }))
             {
                 var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 0, bitrate: MMALVideoEncoder.MaxBitrateMJPEG, timeout: null);
@@ -354,7 +354,7 @@ namespace pi_cam_test
 
                 // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
                 // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
-                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, 640, 480, 0, 0, 0, false, null);
+                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width:640, height:480);
                 var vidEncoderPortConfig = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, 0, MMALVideoEncoder.MaxBitrateLevel4, null);
                 var splitterPortConfig = new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420, 0, 0, null);
 
@@ -459,7 +459,7 @@ namespace pi_cam_test
 
                 // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
                 // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
-                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, 640, 480, 0, 0, 0, false, null);
+                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width:640, height:480);
 
                 splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
                 splitter.ConfigureOutputPort(0, splitterPortConfig, null);
@@ -568,7 +568,7 @@ namespace pi_cam_test
 
                 // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
                 // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
-                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, 640, 480, 0, 0, 0, false, null);
+                var resizerPortConfig = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480);
 
                 splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
                 splitter.ConfigureOutputPort(0, splitterPortConfig, null);
@@ -787,10 +787,9 @@ namespace pi_cam_test
             var cam = MMALCamera.Instance;
 
             // 1296 x 972 with 2x2 binning (full-frame 4:3 capture)
-            MMALCameraConfig.StillResolution = new MMALSharp.Common.Utility.Resolution(1296, 972);
-            MMALCameraConfig.VideoResolution = new MMALSharp.Common.Utility.Resolution(1296, 972);
+            MMALCameraConfig.Resolution = new Resolution(1296, 972);
             MMALCameraConfig.SensorMode = MMALSensorMode.Mode4;
-            MMALCameraConfig.VideoFramerate = new MMAL_RATIONAL_T(24, 1); // numerator & denominator
+            MMALCameraConfig.Framerate = new MMAL_RATIONAL_T(24, 1); // numerator & denominator
 
             // overlay text
             var overlay = new AnnotateImage(Environment.MachineName, 30, Color.White)
