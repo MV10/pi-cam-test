@@ -1,6 +1,6 @@
 # pi-cam-test
 
-| :warning: This branch depends on a local pre-release v0.7 build of MMALSharp packages. |
+| :warning: This branch depends on a _LOCALLY-STORED_ pre-release v0.7 build of MMALSharp packages. |
 | --- |
 
 Getting to know the Raspberry Pi camera and the [MMALSharp](https://github.com/techyian/MMALSharp) .NET library.

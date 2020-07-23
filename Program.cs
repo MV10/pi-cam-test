@@ -75,11 +75,13 @@ namespace pi_cam_test
                             {
                                 showHelp = false;
 
-                                // either of these could be the "-debug" flag
-                                int recordSeconds = 10;
-                                int sensitivity = 130;
+                                int recordSeconds = 0;
+                                int sensitivity = 0;
                                 if (args.Length > 2) int.TryParse(args[2], out recordSeconds);
                                 if (args.Length > 3) int.TryParse(args[3], out sensitivity);
+                                // either of those could have been the "-debug" flag
+                                if (recordSeconds == 0) recordSeconds = 10;
+                                if (sensitivity == 0) sensitivity = 130;
 
                                 await motion(seconds, recordSeconds, sensitivity);
                             }
@@ -209,7 +211,7 @@ namespace pi_cam_test
                 Console.WriteLine($"Capturing MP4: {pathname}");
                 var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                 await Task.WhenAll(new Task[]{
-                    ffmpeg.ManageProcessLifecycleAsync(timerToken.Token),
+                    ffmpeg.ProcessExternalAsync(timerToken.Token),
                     cam.ProcessAsync(cam.Camera.VideoPort, timerToken.Token),
                 }).ConfigureAwait(false);
             }
@@ -270,7 +272,7 @@ namespace pi_cam_test
                 Console.WriteLine($"Capturing MP4: {pathname}");
                 var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                 await Task.WhenAll(new Task[]{
-                    ffmpeg.ManageProcessLifecycleAsync(timerToken.Token),
+                    ffmpeg.ProcessExternalAsync(timerToken.Token),
                     cam.ProcessAsync(cam.Camera.VideoPort, timerToken.Token),
                 }).ConfigureAwait(false);
             }
@@ -318,7 +320,7 @@ namespace pi_cam_test
                 Console.WriteLine($"http://{Environment.MachineName}.local:8554/");
                 var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
                 await Task.WhenAll(new Task[]{
-                    vlc.ManageProcessLifecycleAsync(timeout.Token),
+                    vlc.ProcessExternalAsync(timeout.Token),
                     cam.ProcessAsync(cam.Camera.VideoPort, timeout.Token),
                 }).ConfigureAwait(false);
             }
@@ -378,7 +380,7 @@ namespace pi_cam_test
 
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
 
-                var motionConfig = new MotionConfig(TimeSpan.FromSeconds(recordSeconds), sensitivity);
+                var motionConfig = new MotionConfig(recordDuration:TimeSpan.FromSeconds(recordSeconds), threshold:sensitivity, testFrameInterval:TimeSpan.FromSeconds(3));
 
                 Console.WriteLine($"Detecting motion for {totalSeconds} seconds with sensitivity threshold {sensitivity}...");
 
@@ -388,7 +390,7 @@ namespace pi_cam_test
                     // This callback will be invoked when motion has been detected.
                     () =>
                     {
-                        Console.WriteLine($"Motion detected, recording {recordSeconds} seconds...");
+                        Console.WriteLine($"\n     {DateTime.Now:hh\\:mm\\:ss} Motion detected, recording {recordSeconds} seconds...");
 
                         // Stop motion detection while we are recording.
                         motionCircularBufferCaptureHandler.DisableMotionDetection();
@@ -414,7 +416,7 @@ namespace pi_cam_test
                         // Optionally create new file for our next recording run (don't do the RAW file, we don't want it).
                         vidCaptureHandler.Split();
 
-                        Console.WriteLine("...recording stopped.");
+                        Console.WriteLine($"     {DateTime.Now:hh\\:mm\\:ss} ...recording stopped.");
                     })
                     .ProcessAsync(cam.Camera.VideoPort, cts.Token);
             }
@@ -427,7 +429,7 @@ namespace pi_cam_test
         }
 
         // motion without raw recording, one pass
-        static async Task motion_all_in_one(int totalSeconds, int recordSeconds, int sensitivity)
+        static async Task motion_one_pass(int totalSeconds, int recordSeconds, int sensitivity)
         {
             DeleteFiles(ramdiskPath, "*.h264");
             DeleteFiles(ramdiskPath, "*.raw");
@@ -448,7 +450,7 @@ namespace pi_cam_test
             {
                 // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
                 using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "h264");
-                using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "raw");
+                using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000);
                 using var resizer = new MMALIspComponent();
                 using var vidEncoder = new MMALVideoEncoder();
                 using var renderer = new MMALVideoRenderer();
@@ -481,8 +483,7 @@ namespace pi_cam_test
 
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
 
-                // The recording duration doesn't matter; see notes at top of this method.
-                var motionConfig = new MotionConfig(TimeSpan.FromSeconds(10), sensitivity);
+                var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3));
 
                 Console.WriteLine($"Detecting motion for {totalSeconds} seconds with sensitivity threshold {sensitivity}...");
 
@@ -492,7 +493,7 @@ namespace pi_cam_test
                     // This callback will be invoked when motion has been detected.
                     async () =>
                     {
-                        Console.WriteLine($"Motion detected, recording {recordSeconds} seconds...");
+                        Console.WriteLine($"\n     {DateTime.Now:hh\\:mm\\:ss} Motion detected, recording {recordSeconds} seconds...");
 
                         motionCircularBufferCaptureHandler.DisableMotionDetection();
                         vidCaptureHandler.StartRecording();
@@ -505,7 +506,7 @@ namespace pi_cam_test
                         // When the token expires, stop recording and re-enable capture
                         recordingCTS.Token.Register(() =>
                         {
-                            Console.WriteLine("...recording stopped.");
+                            Console.WriteLine($"     {DateTime.Now:hh\\:mm\\:ss} ...recording stopped.");
 
                             motionCircularBufferCaptureHandler.EnableMotionDetection();
                             vidCaptureHandler.StopRecording();
@@ -557,14 +558,14 @@ namespace pi_cam_test
             {
                 // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
                 using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "h264");
-                using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000, "/media/ramdisk", "raw");
+                using var motionCircularBufferCaptureHandler = new CircularBufferCaptureHandler(4000000);
                 using var resizer = new MMALIspComponent();
                 using var vidEncoder = new MMALVideoEncoder();
                 using var renderer = new MMALVideoRenderer();
                 cam.ConfigureCameraSettings();
 
-                var splitterPortConfig = new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420, 0, 0, null);
-                var vidEncoderPortConfig = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, 0, MMALVideoEncoder.MaxBitrateLevel4, null);
+                var splitterPortConfig = new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420);
+                var vidEncoderPortConfig = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality:0, bitrate:MMALVideoEncoder.MaxBitrateLevel4);
 
                 // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
                 // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
@@ -592,8 +593,7 @@ namespace pi_cam_test
 
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
 
-                // The recording duration doesn't matter; see notes at top of this method.
-                var motionConfig = new MotionConfig(TimeSpan.FromSeconds(10), sensitivity);
+                var motionConfig = new MotionConfig(threshold:sensitivity, testFrameInterval:TimeSpan.FromSeconds(3));
 
                 // Stephen Cleary says CTS disposal is unnecessary as long as you cancel! https://stackoverflow.com/a/19005066/152997
                 var startRecordingCTS = LocalPrepareToRecord();
@@ -617,7 +617,7 @@ namespace pi_cam_test
 
                 async void LocalStartRecording()
                 {
-                    Console.WriteLine($"Motion detected, recording {recordSeconds} seconds...");
+                    Console.WriteLine($"\n     {DateTime.Now:hh\\:mm\\:ss} Motion detected, recording {recordSeconds} seconds...");
                     motionCircularBufferCaptureHandler.DisableMotionDetection();
                     vidCaptureHandler.StartRecording();
                     vidEncoder.RequestIFrame();
@@ -643,7 +643,7 @@ namespace pi_cam_test
 
                 void LocalEndRecording()
                 {
-                    Console.WriteLine("...recording stopped.");
+                    Console.WriteLine($"     {DateTime.Now:hh\\:mm\\:ss} ...recording stopped.");
                     startRecordingCTS = LocalPrepareToRecord();
                     motionCircularBufferCaptureHandler.EnableMotionDetection();
                     vidCaptureHandler.StopRecording();
@@ -656,7 +656,6 @@ namespace pi_cam_test
             cam.Cleanup();
 
             Console.WriteLine("Exiting.");
-
         }
 
         static void copyperf()
