@@ -13,6 +13,7 @@ pi-cam-test -jpg
 pi-cam-test -h264 [seconds]
 pi-cam-test -stream [seconds]
 pi-cam-test -motion [detect-seconds] [record-seconds] [sensitivity]
+pi-cam-test -splitter [detect-seconds] [record-seconds] [jpg-interval] [sensitivity]
 pi-cam-test -copyperf
 pi-cam-test -transcodeperf [ram|sd|lan]
 pi-cam-test -fragmp4 [seconds]
