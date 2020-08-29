@@ -3,7 +3,7 @@ using System.Threading.Tasks;
 
 namespace MMALSharp.Processors.Motion
 {
-
+    // Step 1
     // This is the algorithm currently in MMALSharp.
     // Threshold is both the summed-RGB per-pixel difference threshold 
     // and the total pixel diff count across the entire frame.
@@ -91,7 +91,9 @@ namespace MMALSharp.Processors.Motion
                     byte b2 = buffer.CurrentFrame[index + 2];
                     var rgb2 = r2 + g2 + b2;
 
-                    if (rgb2 - rgb1 > metrics.Threshold)
+                    var rgbDiff = Math.Abs(rgb2 - rgb1);
+
+                    if (rgbDiff > metrics.Threshold)
                     {
                         diff++;
                     }

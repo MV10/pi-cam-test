@@ -84,7 +84,9 @@ namespace MMALSharp.Processors.Motion
                     var rgb1 = buffer.TestFrame[index] + buffer.TestFrame[index + 1] + buffer.TestFrame[index + 2];
                     var rgb2 = buffer.CurrentFrame[index] + buffer.CurrentFrame[index + 1] + buffer.CurrentFrame[index + 2];
 
-                    if (rgb2 - rgb1 > metrics.Threshold)
+                    var rgbDiff = Math.Abs(rgb2 - rgb1);
+
+                    if (rgbDiff > metrics.Threshold)
                     {
                         diff++;
                     }

@@ -3,25 +3,29 @@ using System.Threading.Tasks;
 
 namespace MMALSharp.Processors.Motion
 {
-    // Step 2
+    // Step 3
     // This is a variation on the MMALSharp algorithm to address the Threshold problem.
-    // Grayscale suppresses some of the noise.
+    // Grayscale suppresses some of the noise. Still too sensitive to shadows.
 
-    // Instead of referencing the config Threshold, this uses two values:
+    // Instead of referencing the config Threshold, this uses additional values:
     // RGBThreshold = summed RGB diff (still probably not a good measure)
-    // FrameThreshold = number of diffed pixels per frame
+    // CellPixelPercentage = number of diff pixels per cell to consider the cell changed
+    // CellCountThreshold = number of cells with diffs to trigger motion detection
 
 
-    public class AnalyseSummedRGBPixels : FrameDiffAnalysisBase, IFrameDiffAlgorithm
+    public class AnalyseSummedRGBCells : FrameDiffAnalysisBase, IFrameDiffAlgorithm
     {
         // readonly is thread safe
-        private readonly int RGBThreshold = 130;  // 640x480 @ 32 divs = 1024 cells @ 20x15 = 300 pixels each
-        private readonly int FrameThreshold = 1500; // 640x480 = 307,200 pixels
+        private readonly int RGBThreshold = 130;       // 640x480 @ 32 divs = 1024 cells @ 20x15 = 300 pixels each
+        private readonly int CellPixelPercentage = 50; // percentage of pixels in the cell to mark the cell as changed
+        private readonly int CellCountThreshold = 20;  // number of cells with diffs to trigger motion detection
+
+        private readonly int CellPixelThreshold = (int)((640f / 32f) * (480f / 32f) * (50f / 100f)); // (last bit is CellPixelPercentage)
 
         private Action<byte[]> _writeCallback;
         private byte[] _analysisBuffer;
 
-        public AnalyseSummedRGBPixels(Action<byte[]> writeProcessedFrameCallback)
+        public AnalyseSummedRGBCells(Action<byte[]> writeProcessedFrameCallback)
         {
             _writeCallback = writeProcessedFrameCallback;
         }
@@ -45,12 +49,12 @@ namespace MMALSharp.Processors.Motion
                 diff += cellDiff;
             }
 
-            var detected = (diff > FrameThreshold);
+            var detected = (diff > CellCountThreshold);
 
             // red indicates motion, green indicates no motion
-            if(diff > 0)
+            if (diff > 0)
             {
-                int x2 = (int)(Math.Min(diff, (float)FrameThreshold) / FrameThreshold * 639f); // draw a bar across the screen
+                int x2 = (int)((diff / 1024f) * 639f); // draw a bar across the screen
                 if (detected)
                 {
                     DrawIndicator(255, 0, 0, 0, x2, 0, 10, _analysisBuffer, metrics);
@@ -144,7 +148,7 @@ namespace MMALSharp.Processors.Motion
                 }
             }
 
-            buffer.CellDiff[cellIndex] = diff;
+            buffer.CellDiff[cellIndex] = (diff >= CellPixelThreshold) ? 1 : 0;
         }
     }
 }

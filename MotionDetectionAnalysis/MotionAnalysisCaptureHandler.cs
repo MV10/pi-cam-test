@@ -14,7 +14,8 @@ namespace MMALSharp.Handlers
         {
             _stream = new FileStream(pathname, FileMode.Create, FileAccess.Write);
             //var algorithm = new AnalyseSummedRGB(WriteProcessedFrame);
-            var algorithm = new AnalyseSummedRGBPixels(WriteProcessedFrame);
+            //var algorithm = new AnalyseSummedRGBPixels(WriteProcessedFrame);
+            var algorithm = new AnalyseSummedRGBCells(WriteProcessedFrame);
             _driver = new FrameDiffDriver(config, algorithm, onDetect);
         }
 
