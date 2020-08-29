@@ -15,21 +15,18 @@ using Microsoft.Extensions.Logging;
 using MMALSharp.Common;
 using MMALSharp.Common.Utility;
 
+// This is the algorithm currently in MMALSharp.
+// Threshold is both the summed-RGB per-pixel difference threshold 
+// and the total pixel diff count across the entire frame.
+
 namespace MMALSharp.Processors.Motion
 {
     public class FrameDiffAlgorithmSummedRGB : IFrameDiffAlgorithm
     {
-        private Action _onDetect;
-
-        public FrameDiffAlgorithmSummedRGB(Action onDetect)
-        {
-            _onDetect = onDetect;
-        }
-
-        public virtual void FirstFrameCompleted(FrameDiffBuffer buffer, FrameDiffMetrics metrics)
+        public virtual void FirstFrameCompleted(FrameDiffDriver buffer, FrameDiffMetrics metrics)
         { }
 
-        public virtual bool AnalyseFrames(FrameDiffBuffer buffer, FrameDiffMetrics metrics)
+        public virtual bool AnalyseFrames(FrameDiffDriver buffer, FrameDiffMetrics metrics)
         {
             var result = 
                 Parallel.ForEach(buffer.CellDiff, (cell, loopState, loopIndex) 
@@ -53,18 +50,17 @@ namespace MMALSharp.Processors.Motion
             if (diff >= metrics.Threshold)
             {
                 MMALLog.Logger.LogInformation($"Motion detected! Frame difference {diff}.");
-                _onDetect?.Invoke();
                 return true;
             }
 
             return false;
         }
 
-        public virtual void ResetAnalyser(FrameDiffBuffer buffer, FrameDiffMetrics metrics)
+        public virtual void ResetAnalyser(FrameDiffDriver buffer, FrameDiffMetrics metrics)
         { } // this algorithm is stateless
 
         // FrameDiffMetrics is a structure; it is a by-value copy and all fields are value types which makes it thread safe
-        protected virtual void CheckDiff(long cellIndex, FrameDiffBuffer buffer, FrameDiffMetrics metrics, ParallelLoopState loopState)
+        protected virtual void CheckDiff(long cellIndex, FrameDiffDriver buffer, FrameDiffMetrics metrics, ParallelLoopState loopState)
         {
             int diff = 0;
             var rect = buffer.CellRect[cellIndex];

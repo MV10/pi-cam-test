@@ -20,7 +20,7 @@ namespace MMALSharp.Handlers
     public class TempFrameBufferCaptureHandler : MemoryStreamCaptureHandler, IMotionCaptureHandler, IVideoCaptureHandler
     {
         private bool _detectingMotion;
-        private FrameDiffBuffer _frameDiffBuffer;
+        private FrameDiffDriver _frameDiffDriver;
 
         private bool _waitForFullFrame = true;
         private bool _writeFrameRequested = false;
@@ -101,7 +101,7 @@ namespace MMALSharp.Handlers
 
             if (_detectingMotion)
             {
-                _frameDiffBuffer.Apply(context);
+                _frameDiffDriver.Apply(context);
             }
 
             // accumulate frame data in the underlying memory stream
@@ -124,8 +124,8 @@ namespace MMALSharp.Handlers
         /// <inheritdoc />
         public void ConfigureMotionDetection(MotionConfig config, Action onDetect)
         {
-            var algorithm = new FrameDiffAlgorithmSummedRGB(onDetect);
-            _frameDiffBuffer = new FrameDiffBuffer(config, algorithm);
+            var algorithm = new FrameDiffAlgorithmSummedRGB();
+            _frameDiffDriver = new FrameDiffDriver(config, algorithm, onDetect);
             
             this.EnableMotionDetection();
         }
@@ -134,7 +134,7 @@ namespace MMALSharp.Handlers
         public void EnableMotionDetection()
         {
             _detectingMotion = true;
-            _frameDiffBuffer?.ResetAnalyser();
+            _frameDiffDriver?.ResetAnalyser();
         }
 
         /// <inheritdoc />

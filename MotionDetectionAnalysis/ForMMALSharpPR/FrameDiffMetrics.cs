@@ -39,5 +39,12 @@ namespace MMALSharp.Processors.Motion
         /// Frame metrics collected when the first frame is completed.
         /// </summary>
         internal int FrameBpp;
+
+        // The following fields are only used for motion detection analysis.
+
+        /// <summary>
+        /// Toggles back and forth as TestFrame changes. Allows drawing an on-screen indicator.
+        /// </summary>
+        internal bool Analysis_TestFrameUpdated;
     }
 }

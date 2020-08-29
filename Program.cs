@@ -632,8 +632,12 @@ namespace pi_cam_test
             var analysisPathname = ramdiskPath + "analysis.raw";
             File.Delete(analysisPathname);
 
-            // long test frame interval since we don't care for the analysis
-            var motionConfig = new MotionConfig(testFrameInterval: TimeSpan.FromSeconds(999)); 
+            // SummedRGB problem: Threshold is both the summed-RGB difference and the total count of changed pixels
+            var motionConfig = new MotionConfig()
+            {
+                Threshold = 130,                              // 130 is default, grid cells are 300px (20x15x1024)
+                TestFrameInterval = TimeSpan.FromSeconds(999) // 3 sec is default test frame interval (we now have motion cooldown, enable when detection improves)
+            }; 
 
             using (var stream = File.OpenRead(rawPathname))
             using (var input = new InputCaptureHandler(stream))

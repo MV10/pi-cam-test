@@ -3,17 +3,22 @@ using System.Threading.Tasks;
 
 namespace MMALSharp.Processors.Motion
 {
+    // This is a variation on the MMALSharp algorithm to address the Threshold problem.
+    // Instead of referencing the config Threshold, this uses two values:
+    // PixelThreshold = summed RGB diff (still probably not a good measure)
+    // FrameThreshold = number of diffed pixels per frame
 
-    // This is the algorithm currently in MMALSharp.
-    // Threshold is both the summed-RGB per-pixel difference threshold 
-    // and the total pixel diff count across the entire frame.
 
-    public class AnalyseSummedRGB : FrameDiffAnalysisBase, IFrameDiffAlgorithm
+    public class AnalyseSummedRGBPixels : FrameDiffAnalysisBase, IFrameDiffAlgorithm
     {
+        // readonly is thread safe
+        private readonly int PixelThreshold = 130;  // 640x480 @ 32 divs = 1024 cells @ 20x15 = 300 pixels each
+        private readonly int FrameThreshold = 1500; // 640x480 = 307,200 pixels
+
         private Action<byte[]> _writeCallback;
         private byte[] _analysisBuffer;
 
-        public AnalyseSummedRGB(Action<byte[]> writeProcessedFrameCallback) 
+        public AnalyseSummedRGBPixels(Action<byte[]> writeProcessedFrameCallback)
         {
             _writeCallback = writeProcessedFrameCallback;
         }
@@ -37,10 +42,10 @@ namespace MMALSharp.Processors.Motion
                 diff += cellDiff;
             }
 
-            var detected = (diff > metrics.Threshold);
+            var detected = (diff > FrameThreshold);
 
             // red indicates motion, green indicates no motion
-            if(detected)
+            if (detected)
             {
                 DrawIndicator(255, 0, 0, 108, 127, 459, 479, _analysisBuffer, metrics);
             }
@@ -50,7 +55,7 @@ namespace MMALSharp.Processors.Motion
             }
 
             // changes color each time the test frame is updated
-            if(metrics.Analysis_TestFrameUpdated)
+            if (metrics.Analysis_TestFrameUpdated)
             {
                 DrawIndicator(255, 0, 255, 148, 167, 459, 479, _analysisBuffer, metrics);
             }
@@ -91,7 +96,7 @@ namespace MMALSharp.Processors.Motion
                     byte b2 = buffer.CurrentFrame[index + 2];
                     var rgb2 = r2 + g2 + b2;
 
-                    if (rgb2 - rgb1 > metrics.Threshold)
+                    if (rgb2 - rgb1 > PixelThreshold)
                     {
                         diff++;
                     }
@@ -105,7 +110,7 @@ namespace MMALSharp.Processors.Motion
                     }
 
                     // highlight cell corners
-                    if ((col == rect.X || col == x2 - 1) && ( row == rect.Y || row == y2 - 1))
+                    if ((col == rect.X || col == x2 - 1) && (row == rect.Y || row == y2 - 1))
                     {
                         r2 = 128;
                         g2 = 0;

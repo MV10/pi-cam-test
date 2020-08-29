@@ -1,4 +1,5 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
 using MMALSharp.Common;
 using MMALSharp.Processors.Motion;
 
@@ -6,19 +7,20 @@ namespace MMALSharp.Handlers
 {
     public class MotionAnalysisCaptureHandler : IOutputCaptureHandler, IVideoCaptureHandler
     {
-        private FrameDiffBuffer _frameDiffBuffer;
+        private FrameDiffDriver _driver;
         private FileStream _stream;
 
-        public MotionAnalysisCaptureHandler(string pathname, MotionConfig config)
+        public MotionAnalysisCaptureHandler(string pathname, MotionConfig config, Action onDetect = null)
         {
             _stream = new FileStream(pathname, FileMode.Create, FileAccess.Write);
-            var algorithm = new AnalyseSummedRGB(WriteProcessedFrame);
-            _frameDiffBuffer = new FrameDiffBuffer(config, algorithm);
+            //var algorithm = new AnalyseSummedRGB(WriteProcessedFrame);
+            var algorithm = new AnalyseSummedRGBPixels(WriteProcessedFrame);
+            _driver = new FrameDiffDriver(config, algorithm, onDetect);
         }
 
         public void Process(ImageContext context) 
         {
-            _frameDiffBuffer.Apply(context);
+            _driver.Apply(context);
         }
 
         public void WriteProcessedFrame(byte[] fullFrame)
