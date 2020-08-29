@@ -8,41 +8,30 @@ using System.IO;
 using MMALSharp.Common;
 using MMALSharp.Processors.Motion;
 
+// Modified from PR 169 FrameBufferCaptureHandler to leverage the new FrameDiffBuffer approach.
+// A further PR will require MMALCamera changes to call ConfigureMotionDetection with arbitrary motionConfig types (see stash)
+
 namespace MMALSharp.Handlers
 {
     /// <summary>
     /// A capture handler focused on high-speed frame buffering, either for on-demand snapshots
     /// or for motion detection.
     /// </summary>
-    public class MotionTest : MemoryStreamCaptureHandler, IMotionCaptureHandler, IVideoCaptureHandler
+    public class TempFrameBufferCaptureHandler : MemoryStreamCaptureHandler, IMotionCaptureHandler, IVideoCaptureHandler
     {
-        public string MsPerPass 
-        { 
-            get
-            {
-                return $"{(double)_motionAnalyser.ElapsedTime / (double)_motionAnalyser.Passes:00.0000}";
-            }
-        }
-
-        public long Passes
-        {
-            get => _motionAnalyser.Passes;
-        }
-
-        private MotionConfig _motionConfig;
         private bool _detectingMotion;
-        private ProximityDiffAnalyser _motionAnalyser;
+        private FrameDiffBuffer _frameDiffBuffer;
 
         private bool _waitForFullFrame = true;
         private bool _writeFrameRequested = false;
 
         /// <summary>
-        /// Creates a new <see cref="MotionTest"/> optionally configured to write on-demand snapshots.
+        /// Creates a new <see cref="FrameBufferCaptureHandler"/> optionally configured to write on-demand snapshots.
         /// </summary>
         /// <param name="directory">Target path for image files</param>
         /// <param name="extension">Extension for image files</param>
         /// <param name="fileDateTimeFormat">Filename DateTime formatting string</param>
-        public MotionTest(string directory = "", string extension = "", string fileDateTimeFormat = "yyyy-MM-dd HH.mm.ss.ffff")
+        public TempFrameBufferCaptureHandler(string directory = "", string extension = "", string fileDateTimeFormat = "yyyy-MM-dd HH.mm.ss.ffff")
             : base()
         {
             this.FileDirectory = directory.TrimEnd('/');
@@ -52,9 +41,9 @@ namespace MMALSharp.Handlers
         }
 
         /// <summary>
-        /// Creates a new <see cref="MotionTest"/> configured for motion detection using a raw video stream.
+        /// Creates a new <see cref="FrameBufferCaptureHandler"/> configured for motion detection using a raw video stream.
         /// </summary>
-        public MotionTest()
+        public TempFrameBufferCaptureHandler()
             : base()
         { }
 
@@ -112,7 +101,7 @@ namespace MMALSharp.Handlers
 
             if (_detectingMotion)
             {
-                _motionAnalyser.Apply(context);
+                _frameDiffBuffer.Apply(context);
             }
 
             // accumulate frame data in the underlying memory stream
@@ -135,8 +124,9 @@ namespace MMALSharp.Handlers
         /// <inheritdoc />
         public void ConfigureMotionDetection(MotionConfig config, Action onDetect)
         {
-            _motionConfig = config;
-            _motionAnalyser = new ProximityDiffAnalyser(config, onDetect);
+            var algorithm = new FrameDiffAlgorithmSummedRGB(onDetect);
+            _frameDiffBuffer = new FrameDiffBuffer(config, algorithm);
+            
             this.EnableMotionDetection();
         }
 
@@ -144,7 +134,7 @@ namespace MMALSharp.Handlers
         public void EnableMotionDetection()
         {
             _detectingMotion = true;
-            _motionAnalyser?.ResetAnalyser();
+            _frameDiffBuffer?.ResetAnalyser();
         }
 
         /// <inheritdoc />

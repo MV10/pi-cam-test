@@ -9,6 +9,7 @@ using MMALSharp.Handlers;
 using MMALSharp.Native;
 using MMALSharp.Ports;
 using MMALSharp.Ports.Outputs;
+using MMALSharp.Processors.Effects;
 using MMALSharp.Processors.Motion;
 using Mono.Unix.Native;
 using Serilog;
@@ -30,9 +31,10 @@ namespace pi_cam_test
 
         private static bool useDebug = false;
 
+        private static Stopwatch stopwatch = new Stopwatch();
+
         static async Task Main(string[] args)
         {
-            var stopwatch = new Stopwatch();
             stopwatch.Start();
             try
             {
@@ -51,26 +53,34 @@ namespace pi_cam_test
 
                     switch (args[0].ToLower())
                     {
-                        case "-test":
-                            if (hasSeconds)
-                            {
-                                showHelp = false;
-
-                                int recordSeconds = 0;
-                                int sensitivity = 0;
-                                if (args.Length > 2) int.TryParse(args[2], out recordSeconds);
-                                if (args.Length > 3) int.TryParse(args[3], out sensitivity);
-                                // either of those could have been the "-debug" flag
-                                if (recordSeconds == 0) recordSeconds = 10;
-                                if (sensitivity == 0) sensitivity = 130;
-
-                                await test(seconds, recordSeconds, sensitivity);
-                            }
-                            break;
-
                         case "-jpg":
                             showHelp = false;
                             await jpg();
+                            break;
+
+                        case "-bmp":
+                            showHelp = false;
+                            await bmp();
+                            break;
+
+                        case "-vis":
+                            if (args.Length < 2) break;
+                            showHelp = false;
+                            await visualize(args[1]);
+                            break;
+
+                        case "-rawtomp4":
+                            if (args.Length < 2) break;
+                            showHelp = false;
+                            await rawtomp4(args[1]);
+                            break;
+
+                        case "-rawrgb24":
+                            if (hasSeconds)
+                            {
+                                showHelp = false;
+                                await rawrgb24(seconds);
+                            }
                             break;
 
                         case "-stream":
@@ -87,6 +97,12 @@ namespace pi_cam_test
                                 showHelp = false;
                                 await h264(seconds);
                             }
+                            break;
+
+                        case "-h264tomp4":
+                            if (args.Length < 3) break;
+                            showHelp = false;
+                            h264tomp4(args[1], args[2]);
                             break;
 
                         case "-motion":
@@ -172,6 +188,11 @@ namespace pi_cam_test
                 {
                     Console.WriteLine("Usage:\n");
                     Console.WriteLine("pi-cam-test -jpg");
+                    Console.WriteLine("pi-cam-test -bmp");
+                    Console.WriteLine("pi-cam-test -rawrgb24 [seconds]");
+                    Console.WriteLine("pi-cam-test -vis [raw_filename]");
+                    Console.WriteLine("pi-cam-test -rawtomp4 [raw_filename]");
+                    Console.WriteLine("pi-cam-test -h264tomp4 [h264_pathname] [mp4_pathname]");
                     Console.WriteLine("pi-cam-test -h264 [seconds]");
                     Console.WriteLine("pi-cam-test -stream [seconds]");
                     Console.WriteLine("pi-cam-test -motion [total_seconds] [record_seconds=10] [sensitivity=130]");
@@ -190,8 +211,8 @@ namespace pi_cam_test
                 if (MMALLog.Logger != null) MMALLog.Logger.LogError(msg);
             }
             stopwatch.Stop();
-            Console.WriteLine($"\nElapsed: {stopwatch.Elapsed:hh\\:mm\\:ss}\n\n");
-            if (MMALLog.Logger != null) MMALLog.Logger.LogDebug("Application exit");
+            WriteElapsedTime();
+            MMALLog.Logger.LogDebug("Application exit");
         }
 
         static async Task jpg()
@@ -201,6 +222,17 @@ namespace pi_cam_test
             using var handler = new ImageStreamCaptureHandler(pathname);
             Console.WriteLine($"Capturing JPG: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.JPEG, MMALEncoding.I420).ConfigureAwait(false);
+            cam.Cleanup();
+            Console.WriteLine("Exiting.");
+        }
+
+        static async Task bmp()
+        {
+            var cam = GetConfiguredCamera();
+            var pathname = ramdiskPath + "snapshot.bmp";
+            using var handler = new ImageStreamCaptureHandler(pathname);
+            Console.WriteLine($"Capturing BMP: {pathname}");
+            await cam.TakePicture(handler, MMALEncoding.BMP, MMALEncoding.I420).ConfigureAwait(false);
             cam.Cleanup();
             Console.WriteLine("Exiting.");
         }
@@ -385,7 +417,8 @@ namespace pi_cam_test
             {
                 // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
                 using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, ramdiskPath, "h264");
-                using var motionCaptureHandler = new FrameBufferCaptureHandler();
+                //using var motionCaptureHandler = new FrameBufferCaptureHandler();
+                using var motionCaptureHandler = new TempFrameBufferCaptureHandler();
                 using var resizer = new MMALIspComponent();
                 using var vidEncoder = new MMALVideoEncoder();
                 using var renderer = new MMALVideoRenderer();
@@ -409,7 +442,18 @@ namespace pi_cam_test
 
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
 
-                var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3), motionMaskPathname: motionMaskPath);
+                //var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3), motionMaskPathname: motionMaskPath);
+                var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3));
+
+                //var motionConfig = new MotionConfigHSV(testFrameInterval: TimeSpan.FromSeconds(3))
+                //{
+                //    PerCellThreshold = true,    // frame-level diff is cell count, not pixels
+                //    Threshold = 5,              // minimum number of cells that must have changes
+                //    CellMinimumDiff = 200,      // minimum pixel diff per cell to qualify as changed
+
+                //    // 640 x 480 with 32 divisions = 1024 cells
+                //    // each cell is 20 x 15 = 300 pixels
+                //};
 
                 Console.WriteLine($"Detecting motion for {totalSeconds} seconds with sensitivity threshold {sensitivity}...");
 
@@ -479,7 +523,7 @@ namespace pi_cam_test
                 splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
 
                 resizer.ConfigureOutputPort<VideoPort>(0, new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480), motionCaptureHandler);
-                vidEncoder.ConfigureOutputPort(new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, 0, MMALVideoEncoder.MaxBitrateLevel4, null), vidCaptureHandler);
+                vidEncoder.ConfigureOutputPort(new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: MMALVideoEncoder.MaxBitrateLevel4, null), vidCaptureHandler);
                 imgEncoder.ConfigureOutputPort(new MMALPortConfig(MMALEncoding.JPEG, MMALEncoding.I420, quality: 90), imgCaptureHandler); // new vs motion example
 
                 cam.Camera.VideoPort.ConnectTo(splitter);
@@ -547,6 +591,115 @@ namespace pi_cam_test
 
             cam.Cleanup();
             Console.WriteLine("Exiting.");
+        }
+
+        static async Task rawrgb24(int totalSeconds)
+        {
+            var cam = GetConfiguredCamera(withOverlay: false);
+
+            Console.WriteLine("Preparing pipeline...");
+            cam.ConfigureCameraSettings();
+
+            var rawPathname = ramdiskPath + "output.raw";
+            File.Delete(rawPathname);
+
+            using (var capture = new VideoStreamCaptureHandler(rawPathname))
+            using (var splitter = new MMALSplitterComponent())
+            using (var resizer = new MMALIspComponent())
+            {
+                splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
+                resizer.ConfigureOutputPort<VideoPort>(0, new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480), capture);
+                cam.Camera.VideoPort.ConnectTo(splitter);
+                splitter.Outputs[0].ConnectTo(resizer);
+
+                Console.WriteLine("Camera warmup...");
+                await Task.Delay(2000);
+
+                Console.WriteLine($"Capturing {totalSeconds} seconds of raw RGB24 video...");
+                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
+                await cam.ProcessAsync(cam.Camera.VideoPort, cts.Token);
+            }
+            cam.Cleanup();
+            Console.WriteLine("Exiting.");
+        }
+
+        static async Task visualize(string rawFilename)
+        {
+            Console.WriteLine("Preparing pipeline...");
+            MMALStandalone standalone = MMALStandalone.Instance;
+
+            var rawPathname = ramdiskPath + rawFilename;
+            var analysisPathname = ramdiskPath + "analysis.raw";
+            File.Delete(analysisPathname);
+
+            // long test frame interval since we don't care for the analysis
+            var motionConfig = new MotionConfig(testFrameInterval: TimeSpan.FromSeconds(999)); 
+
+            using (var stream = File.OpenRead(rawPathname))
+            using (var input = new InputCaptureHandler(stream))
+            using (var analysis = new MotionAnalysisCaptureHandler(analysisPathname, motionConfig))
+            using (var resizer = new MMALIspComponent())
+            {
+                var cfg = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480, framerate: 24, zeroCopy: true);
+                resizer.ConfigureInputPort(cfg, null, input);
+                resizer.ConfigureOutputPort<FileEncodeOutputPort>(0, cfg, analysis);
+
+                Console.WriteLine("Processing raw RGB24 file through motion analysis filter...");
+                await standalone.ProcessAsync(resizer);
+            }
+            standalone.Cleanup();
+
+            Console.WriteLine("Analysis complete.");
+            WriteElapsedTime();
+
+            await rawtomp4("analysis.raw");
+        }
+
+        static async Task rawtomp4(string rawFilename)
+        {
+            Console.WriteLine("Preparing pipeline...");
+            MMALStandalone standalone = MMALStandalone.Instance;
+
+            var rawPathname = ramdiskPath + rawFilename;
+            var h264Pathname = ramdiskPath + "output.h264";
+            var mp4Pathname = ramdiskPath + "output.mp4";
+            File.Delete(h264Pathname);
+            File.Delete(mp4Pathname);
+
+            using (var stream = File.OpenRead(rawPathname))
+            using (var input = new InputCaptureHandler(stream))
+            using (var output = new VideoStreamCaptureHandler(h264Pathname))
+            using (var encoder = new MMALVideoEncoder())
+            {
+                var rgb24config = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480, framerate: 24, zeroCopy: true);
+                var h264config = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, width: 640, height: 480, framerate: 24, quality: 10, bitrate: MMALVideoEncoder.MaxBitrateLevel4);
+                encoder.ConfigureInputPort(rgb24config, null, input);
+                encoder.ConfigureOutputPort<FileEncodeOutputPort>(0, h264config, output);
+
+                Console.WriteLine("Processing raw RGB24 file to h.264 through vis filter...");
+                await standalone.ProcessAsync(encoder);
+            }
+            standalone.Cleanup();
+
+            h264tomp4(h264Pathname, mp4Pathname);
+
+            Console.WriteLine("Exiting.");
+        }
+
+        static void h264tomp4(string h264Pathname, string mp4Pathname)
+        {
+            Console.WriteLine("Transcoding h.264 to mp4...");
+            using (var proc = new Process())
+            {
+                proc.StartInfo = new ProcessStartInfo
+                {
+                    FileName = "ffmpeg",
+                    Arguments = $"-hide_banner -loglevel error -stats -framerate 24 -i \"{h264Pathname}\" -c copy \"{mp4Pathname}\""
+                };
+                proc.Start();
+                proc.WaitForExit();
+                proc.Dispose();
+            }
         }
 
         static void copyperf()
@@ -657,7 +810,7 @@ namespace pi_cam_test
             Console.WriteLine("Exiting.");
         }
 
-        static MMALCamera GetConfiguredCamera()
+        static MMALCamera GetConfiguredCamera(bool withOverlay = true)
         {
             if (useDebug)
             {
@@ -681,20 +834,23 @@ namespace pi_cam_test
             MMALCameraConfig.SensorMode = MMALSensorMode.Mode4;
             MMALCameraConfig.Framerate = new MMAL_RATIONAL_T(24, 1); // numerator & denominator
 
-            // overlay text
-            var overlay = new AnnotateImage(Environment.MachineName, 30, Color.White)
+            if(withOverlay)
             {
-                ShowDateText = true,
-                ShowTimeText = true,
-            };
+                // overlay text
+                var overlay = new AnnotateImage(Environment.MachineName, 30, Color.White)
+                {
+                    ShowDateText = true,
+                    ShowTimeText = true,
+                };
 
-            // new v0.7 properties
-            overlay.DateFormat = "yyyy-MM-dd";
-            overlay.TimeFormat = "HH:mm:ss";
-            overlay.RefreshRate = DateTimeTextRefreshRate.Seconds;
+                // new v0.7 properties
+                overlay.DateFormat = "yyyy-MM-dd";
+                overlay.TimeFormat = "HH:mm:ss";
+                overlay.RefreshRate = DateTimeTextRefreshRate.Seconds;
 
-            MMALCameraConfig.Annotate = overlay;
-            cam.EnableAnnotation();
+                MMALCameraConfig.Annotate = overlay;
+                cam.EnableAnnotation();
+            }
 
             // image quality tweaks to play with later
             MMALCameraConfig.Sharpness = 0;             // 0 = auto, default; -100 to 100
@@ -722,91 +878,6 @@ namespace pi_cam_test
             }
         }
 
-        static async Task test(int totalSeconds, int recordSeconds, int sensitivity)
-        {
-            DeleteFiles(ramdiskPath, "*.h264");
-
-            var cam = GetConfiguredCamera();
-            MMALCameraConfig.InlineHeaders = true; // h.264 requires key frames for the circular buffer capture handler.
-            cam.ConfigureCameraSettings();
-
-            Console.WriteLine("Preparing pipeline...");
-            using (var splitter = new MMALSplitterComponent())
-            {
-                // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
-                using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, ramdiskPath, "h264");
-                using var motionCaptureHandler = new MotionTest();
-                using var resizer = new MMALIspComponent();
-                using var vidEncoder = new MMALVideoEncoder();
-                using var renderer = new MMALVideoRenderer();
-
-                splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
-                vidEncoder.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), splitter.Outputs[1], null);
-
-                // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
-                // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
-                resizer.ConfigureOutputPort<VideoPort>(0, new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480), motionCaptureHandler);
-                vidEncoder.ConfigureOutputPort(new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, 0, MMALVideoEncoder.MaxBitrateLevel4, null), vidCaptureHandler);
-
-                cam.Camera.VideoPort.ConnectTo(splitter);
-                cam.Camera.PreviewPort.ConnectTo(renderer);
-
-                splitter.Outputs[0].ConnectTo(resizer);
-                splitter.Outputs[1].ConnectTo(vidEncoder);
-
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
-
-                var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
-
-                var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3)); //, motionMaskPathname: motionMaskPath);
-
-                Console.WriteLine($"Detecting motion for {totalSeconds} seconds with sensitivity threshold {sensitivity}...");
-
-                await cam.WithMotionDetection(
-                    motionCaptureHandler,
-                    motionConfig,
-                    // This callback will be invoked when motion has been detected.
-                    async () =>
-                    {
-                        Console.WriteLine($"\n     {DateTime.Now:hh\\:mm\\:ss} Motion detected, recording {recordSeconds} seconds...");
-
-                        motionCaptureHandler.DisableMotionDetection();
-
-                        // Prepare to record
-                        // Stephen Cleary says CTS disposal is unnecessary as long as you cancel! https://stackoverflow.com/a/19005066/152997
-                        var stopRecordingCts = new CancellationTokenSource();
-
-                        // When the token expires, stop recording and re-enable capture
-                        stopRecordingCts.Token.Register(() =>
-                        {
-                            Console.WriteLine($"     {DateTime.Now:hh\\:mm\\:ss} ...recording stopped.");
-
-                            motionCaptureHandler.EnableMotionDetection();
-                            vidCaptureHandler.StopRecording();
-                            vidCaptureHandler.Split();
-                        });
-
-                        // Start the clock
-                        stopRecordingCts.CancelAfter(recordSeconds * 1000);
-
-                        // Record until the duration passes or the overall motion detection token expires
-                        await Task.WhenAny(
-                            vidCaptureHandler.StartRecording(vidEncoder.RequestIFrame, stopRecordingCts.Token),
-                            cts.Token.AsTask()
-                        );
-                        if (!stopRecordingCts.IsCancellationRequested) stopRecordingCts.Cancel();
-                    })
-                    .ProcessAsync(cam.Camera.VideoPort, cts.Token);
-
-                Console.WriteLine($"milliseconds per pass: {motionCaptureHandler.MsPerPass}, passes: {motionCaptureHandler.Passes}");
-            }
-
-            // can't use the convenient fall-through using or MMALCamera.Cleanup
-            // throws: Argument is invalid. Unable to destroy component
-            cam.Cleanup();
-
-            Console.WriteLine("Exiting.");
-        }
+        static void WriteElapsedTime() => Console.WriteLine($"\nElapsed: {stopwatch.Elapsed:hh\\:mm\\:ss}\n\n");
     }
 }
