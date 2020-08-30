@@ -680,7 +680,7 @@ namespace pi_cam_test
                 encoder.ConfigureInputPort(rgb24config, null, input);
                 encoder.ConfigureOutputPort<FileEncodeOutputPort>(0, h264config, output);
 
-                Console.WriteLine("Processing raw RGB24 file to h.264 through vis filter...");
+                Console.WriteLine("Processing raw RGB24 file to h.264...");
                 await standalone.ProcessAsync(encoder);
             }
             standalone.Cleanup();
@@ -692,7 +692,7 @@ namespace pi_cam_test
 
         static void h264tomp4(string h264Pathname, string mp4Pathname)
         {
-            Console.WriteLine("Transcoding h.264 to mp4...");
+            Console.WriteLine("\nTranscoding h.264 to mp4...");
             using (var proc = new Process())
             {
                 proc.StartInfo = new ProcessStartInfo

@@ -3,29 +3,23 @@ using System.Threading.Tasks;
 
 namespace MMALSharp.Processors.Motion
 {
-    // Step 3
-    // This is a variation on the MMALSharp algorithm to address the Threshold problem.
-    // Grayscale suppresses some of the noise. Still too sensitive to lighting changes.
+    // Step 4
+    // HSV
 
-    // Instead of referencing the config Threshold, this uses additional values:
-    // RGBThreshold = summed RGB diff (still probably not a good measure)
-    // CellPixelPercentage = number of diff pixels per cell to consider the cell changed
-    // CellCountThreshold = number of cells with diffs to trigger motion detection
-
-
-    public class AnalyseSummedRGBCells : FrameDiffAnalysisBase, IFrameDiffAlgorithm
+    public class AnalyseHSV : FrameDiffAnalysisBase, IFrameDiffAlgorithm
     {
         // readonly is thread safe
-        private readonly int RGBThreshold = 130;       // 640x480 @ 32 divs = 1024 cells @ 20x15 = 300 pixels each
-        private readonly int CellPixelPercentage = 50; // percentage of pixels in the cell to mark the cell as changed
-        private readonly int CellCountThreshold = 20;  // number of cells with diffs to trigger motion detection
 
-        private readonly int CellPixelThreshold = (int)((640f / 32f) * (480f / 32f) * (50f / 100f)); // (last bit is CellPixelPercentage)
+
+        private readonly int CellPixelPercentage = 50;
+        private readonly int CellPixelThreshold = 150; // cells have 300 pixels at 640x480 / 32 = 20x15 per cell, this is 50%
+
+        private readonly int CellCountThreshold = 20;
 
         private Action<byte[]> _writeCallback;
         private byte[] _analysisBuffer;
 
-        public AnalyseSummedRGBCells(Action<byte[]> writeProcessedFrameCallback)
+        public AnalyseHSV(Action<byte[]> writeProcessedFrameCallback)
         {
             _writeCallback = writeProcessedFrameCallback;
         }
@@ -103,34 +97,48 @@ namespace MMALSharp.Processors.Motion
                     byte r = buffer.TestFrame[index];
                     byte g = buffer.TestFrame[index + 1];
                     byte b = buffer.TestFrame[index + 2];
-                    byte gs = Grayscale(r, g, b);
-                    var rgb1 = gs * 3;
+                    var hsv1 = RGBToHSV(r, g, b);
 
                     r = buffer.CurrentFrame[index];
                     g = buffer.CurrentFrame[index + 1];
                     b = buffer.CurrentFrame[index + 2];
-                    gs = Grayscale(r, g, b);
-                    var rgb2 = gs * 3;
+                    var hsv2 = RGBToHSV(r, g, b);
 
-                    var rgbDiff = Math.Abs(rgb2 - rgb1);
+                    // variance in hue
+                    var hueVariance = 30f / 360f;
+                    var hueDiff = Math.Abs(hsv1.h - hsv2.h);
 
-                    if (rgbDiff > RGBThreshold)
+                    if(hueDiff > hueVariance)
                     {
-                        diff++;
-
-                        // set diff pixels to full color
-                        r = buffer.CurrentFrame[index];
-                        g = buffer.CurrentFrame[index + 1];
-                        b = buffer.CurrentFrame[index + 2];
+                        // leave pixel on
                     }
                     else
                     {
-                        // set non-diff pixels to dim monochrome
-                        byte dimgray = (byte)((Grayscale(r, g, b)) / 3);
-                        r = dimgray;
-                        g = dimgray;
-                        b = dimgray;
+                        r = 0;
+                        g = 0;
+                        b = 0;
                     }
+
+                    //if (score > MinScore)
+                    //{
+                    //    diff++;
+
+                    //    // set diff pixels to full color
+                    //    r = buffer.CurrentFrame[index];
+                    //    g = buffer.CurrentFrame[index + 1];
+                    //    b = buffer.CurrentFrame[index + 2];
+                    //}
+                    //else
+                    //{
+                    //    // set non-diff pixels to dim monochrome
+                    //    byte dimgray = (byte)((Grayscale(r, g, b)) / 3);
+                    //    r = dimgray;
+                    //    g = dimgray;
+                    //    b = dimgray;
+                    //}
+
+                    //(r, g, b) = HSVToRGB(hsv2.h, hsv2.s, hsv2.v);
+                    //(r, g, b) = HSVToRGB(hsv2.h, 0.5f, 0.5f);
 
                     // highlight cell corners
                     if ((col == rect.X || col == x2 - 1) && (row == rect.Y || row == y2 - 1))
