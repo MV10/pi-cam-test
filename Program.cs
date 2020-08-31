@@ -35,6 +35,12 @@ namespace pi_cam_test
 
         static async Task Main(string[] args)
         {
+            if(Environment.OSVersion.Platform != PlatformID.Unix)
+            {
+                Console.WriteLine("\n\n\nHey dumbass, run this on yer Pi!\n\n\n");
+                return;
+            }
+
             stopwatch.Start();
             try
             {

@@ -25,6 +25,36 @@ namespace MMALSharp.Processors.Motion
             }
         }
 
+        public void HighlightCell(byte r, byte g, byte b, FrameDiffDriver driver, FrameDiffMetrics metrics, int index, byte[] buffer)
+        {
+            for(int x = driver.CellRect[index].X; x < driver.CellRect[index].X + driver.CellRect[index].Width; x++)
+            {
+                var y = driver.CellRect[index].Y;
+                var i = (x * metrics.FrameBpp) + (y * metrics.FrameStride);
+                buffer[i] = r;
+                buffer[i + 1] = g;
+                buffer[i + 2] = b;
+                y += driver.CellRect[index].Height - 1;
+                i = (x * metrics.FrameBpp) + (y * metrics.FrameStride);
+                buffer[i] = r;
+                buffer[i + 1] = g;
+                buffer[i + 2] = b;
+            }
+            for(int y = driver.CellRect[index].Y; y < driver.CellRect[index].Y + driver.CellRect[index].Height; y++)
+            {
+                var x = driver.CellRect[index].X;
+                var i = (x * metrics.FrameBpp) + (y * metrics.FrameStride);
+                buffer[i] = r;
+                buffer[i + 1] = g;
+                buffer[i + 2] = b;
+                x += driver.CellRect[index].Width - 1;
+                i = (x * metrics.FrameBpp) + (y * metrics.FrameStride);
+                buffer[i] = r;
+                buffer[i + 1] = g;
+                buffer[i + 2] = b;
+            }
+        }
+
         // move to MMALSharp utils color class
         public byte Grayscale(byte r, byte g, byte b)
             => (byte)((int)(r * 0.2989f) + (int)(g * 0.587f) + (int)(b * 0.114f));

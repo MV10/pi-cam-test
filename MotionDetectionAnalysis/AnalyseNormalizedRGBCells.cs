@@ -1,16 +1,15 @@
-﻿using System;
+﻿using MMALSharp.Common;
+using System;
 using System.Threading.Tasks;
 
 namespace MMALSharp.Processors.Motion
 {
-    // Step 4
-    // HSV
+    // Step 5
+    // Normalized RGB seems to discard too much detail
 
-    public class AnalyseHSV : FrameDiffAnalysisBase, IFrameDiffAlgorithm
+    public class AnalyseNormalizedRGBCells : FrameDiffAnalysisBase, IFrameDiffAlgorithm
     {
         // readonly is thread safe
-
-
         private readonly int CellPixelPercentage = 50;
         private readonly int CellPixelThreshold = 150; // cells have 300 pixels at 640x480 / 32 = 20x15 per cell, this is 50%
 
@@ -19,7 +18,7 @@ namespace MMALSharp.Processors.Motion
         private Action<byte[]> _writeCallback;
         private byte[] _analysisBuffer;
 
-        public AnalyseHSV(Action<byte[]> writeProcessedFrameCallback)
+        public AnalyseNormalizedRGBCells(Action<byte[]> writeProcessedFrameCallback)
         {
             _writeCallback = writeProcessedFrameCallback;
         }
@@ -38,9 +37,10 @@ namespace MMALSharp.Processors.Motion
                 => CheckDiff(loopIndex, buffer, metrics, loopState));
 
             int diff = 0;
-            foreach (var cellDiff in buffer.CellDiff)
+            for (int i = 0; i < buffer.CellDiff.Length; i++)
             {
-                diff += cellDiff;
+                diff += buffer.CellDiff[i];
+                if (buffer.CellDiff[i] == 1) HighlightCell(255, 0, 255, buffer, metrics, i, _analysisBuffer);
             }
 
             var detected = (diff > CellCountThreshold);
@@ -94,63 +94,42 @@ namespace MMALSharp.Processors.Motion
 
                     // Ignore the mask for analysis purposes
 
-                    byte r = buffer.TestFrame[index];
-                    byte g = buffer.TestFrame[index + 1];
-                    byte b = buffer.TestFrame[index + 2];
-                    var hsv1 = RGBToHSV(r, g, b);
+                    float r1 = buffer.TestFrame[index];
+                    float g1 = buffer.TestFrame[index + 1];
+                    float b1 = buffer.TestFrame[index + 2];
+                    float rgb1 = r1 + g1 + b1;
+                    r1 = (r1 / rgb1) * 255.999f;
+                    g1 = (g1 / rgb1) * 255.999f;
+                    b1 = (b1 / rgb1) * 255.999f;
+                    rgb1 = r1 + g1 + b1;
 
-                    r = buffer.CurrentFrame[index];
-                    g = buffer.CurrentFrame[index + 1];
-                    b = buffer.CurrentFrame[index + 2];
-                    var hsv2 = RGBToHSV(r, g, b);
+                    float r2 = buffer.CurrentFrame[index];
+                    float g2 = buffer.CurrentFrame[index + 1];
+                    float b2 = buffer.CurrentFrame[index + 2];
+                    float rgb2 = r2 + g2 + b2;
+                    r2 = (r2 / rgb2) * 255.999f;
+                    g2 = (g2 / rgb2) * 255.999f;
+                    b2 = (b2 / rgb2) * 255.999f;
+                    rgb2 = r2 + g2 + b2;
 
-                    // variance in hue
-                    var hueVariance = 30f / 360f;
-                    var hueDiff = Math.Abs(hsv1.h - hsv2.h);
+                    float rgbDiff = Math.Abs(rgb2 - rgb1);
 
-                    if(hueDiff > hueVariance)
+                    if (rgbDiff > metrics.Threshold)
                     {
-                        // leave pixel on
+                        diff++;
                     }
-                    else
-                    {
-                        r = 0;
-                        g = 0;
-                        b = 0;
-                    }
-
-                    //if (score > MinScore)
-                    //{
-                    //    diff++;
-
-                    //    // set diff pixels to full color
-                    //    r = buffer.CurrentFrame[index];
-                    //    g = buffer.CurrentFrame[index + 1];
-                    //    b = buffer.CurrentFrame[index + 2];
-                    //}
-                    //else
-                    //{
-                    //    // set non-diff pixels to dim monochrome
-                    //    byte dimgray = (byte)((Grayscale(r, g, b)) / 3);
-                    //    r = dimgray;
-                    //    g = dimgray;
-                    //    b = dimgray;
-                    //}
-
-                    //(r, g, b) = HSVToRGB(hsv2.h, hsv2.s, hsv2.v);
-                    //(r, g, b) = HSVToRGB(hsv2.h, 0.5f, 0.5f);
 
                     // highlight cell corners
                     if ((col == rect.X || col == x2 - 1) && (row == rect.Y || row == y2 - 1))
                     {
-                        r = 128;
-                        g = 0;
-                        b = 128;
+                        r2 = 128;
+                        g2 = 0;
+                        b2 = 128;
                     }
 
-                    _analysisBuffer[index] = r;
-                    _analysisBuffer[index + 1] = g;
-                    _analysisBuffer[index + 2] = b;
+                    _analysisBuffer[index] = (byte)r2;
+                    _analysisBuffer[index + 1] = (byte)g2;
+                    _analysisBuffer[index + 2] = (byte)b2;
 
                     // No early exit for analysis purposes
                 }
