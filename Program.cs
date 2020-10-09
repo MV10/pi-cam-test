@@ -1,6 +1,5 @@
 ﻿using Microsoft.Extensions.Logging;
 using MMALSharp;
-using MMALSharp.Callbacks;
 using MMALSharp.Common;
 using MMALSharp.Common.Utility;
 using MMALSharp.Components;
@@ -16,7 +15,9 @@ using Serilog;
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -32,6 +33,8 @@ namespace pi_cam_test
         private static bool useDebug = false;
 
         private static Stopwatch stopwatch = new Stopwatch();
+
+        // TODO motion and splitter sensitivity args not applicable / need updating
 
         static async Task Main(string[] args)
         {
@@ -59,6 +62,26 @@ namespace pi_cam_test
 
                     switch (args[0].ToLower())
                     {
+                        case "-snapshotsharpen":
+                            showHelp = false;
+                            await snapshotSharpen();
+                            break;
+
+                        case "-snapshotblur3":
+                            showHelp = false;
+                            await snapshotBlur3();
+                            break;
+
+                        case "-snapshotblur5":
+                            showHelp = false;
+                            await snapshotBlur5();
+                            break;
+
+                        case "-snapshotedge":
+                            showHelp = false;
+                            await snapshotEdge();
+                            break;
+
                         case "-jpg":
                             showHelp = false;
                             await jpg();
@@ -69,10 +92,10 @@ namespace pi_cam_test
                             await bmp();
                             break;
 
-                        case "-vis":
+                        case "-visfile":
                             if (args.Length < 2) break;
                             showHelp = false;
-                            await visualize(args[1]);
+                            await visualizeFile(args[1]);
                             break;
 
                         case "-rawtomp4":
@@ -94,6 +117,14 @@ namespace pi_cam_test
                             {
                                 showHelp = false;
                                 await stream(seconds);
+                            }
+                            break;
+
+                        case "-visstream":
+                            if (hasSeconds)
+                            {
+                                showHelp = false;
+                                await visualizeStream(seconds);
                             }
                             break;
 
@@ -196,11 +227,12 @@ namespace pi_cam_test
                     Console.WriteLine("pi-cam-test -jpg");
                     Console.WriteLine("pi-cam-test -bmp");
                     Console.WriteLine("pi-cam-test -rawrgb24 [seconds]");
-                    Console.WriteLine("pi-cam-test -vis [raw_filename]");
+                    Console.WriteLine("pi-cam-test -visfile [raw_filename]");
                     Console.WriteLine("pi-cam-test -rawtomp4 [raw_filename]");
                     Console.WriteLine("pi-cam-test -h264tomp4 [h264_pathname] [mp4_pathname]");
                     Console.WriteLine("pi-cam-test -h264 [seconds]");
                     Console.WriteLine("pi-cam-test -stream [seconds]");
+                    Console.WriteLine("pi-cam-test -visstream [seconds]");
                     Console.WriteLine("pi-cam-test -motion [total_seconds] [record_seconds=10] [sensitivity=130]");
                     Console.WriteLine("pi-cam-test -splitter [total_seconds] [record_seconds=10] [jpg-interval=1] [sensitivity=130]");
                     Console.WriteLine("pi-cam-test -copyperf");
@@ -212,7 +244,7 @@ namespace pi_cam_test
             }
             catch(Exception ex)
             {
-                var msg = $"Exception: {ex.Message}";
+                var msg = $"Exception: {ex.Message}\n{ex.StackTrace}";
                 Console.WriteLine($"\n\n{msg}");
                 if (MMALLog.Logger != null) MMALLog.Logger.LogError(msg);
             }
@@ -225,6 +257,7 @@ namespace pi_cam_test
         {
             var cam = GetConfiguredCamera();
             var pathname = ramdiskPath + "snapshot.jpg";
+            File.Delete(pathname);
             using var handler = new ImageStreamCaptureHandler(pathname);
             Console.WriteLine($"Capturing JPG: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.JPEG, MMALEncoding.I420).ConfigureAwait(false);
@@ -235,7 +268,15 @@ namespace pi_cam_test
         static async Task bmp()
         {
             var cam = GetConfiguredCamera();
+
+            //MMALCameraConfig.ImageFx = MMAL_PARAM_IMAGEFX_T.MMAL_PARAM_IMAGEFX_EMBOSS;
+            
+            //MMALCameraConfig.Resolution = new Resolution(640, 480);
+            //MMALCameraConfig.SensorMode = MMALSensorMode.Mode7; // for some reason mode 6 has a pinkish tinge
+            //MMALCameraConfig.Framerate = new MMAL_RATIONAL_T(20, 1);
+
             var pathname = ramdiskPath + "snapshot.bmp";
+            File.Delete(pathname);
             using var handler = new ImageStreamCaptureHandler(pathname);
             Console.WriteLine($"Capturing BMP: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.BMP, MMALEncoding.I420).ConfigureAwait(false);
@@ -283,8 +324,7 @@ namespace pi_cam_test
                 cam.Camera.VideoPort.ConnectTo(encoder);
                 cam.Camera.PreviewPort.ConnectTo(renderer);
 
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
+                await cameraWarmupDelay(cam);
 
                 Console.WriteLine($"Capturing MP4: {pathname}");
                 var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
@@ -294,8 +334,6 @@ namespace pi_cam_test
                 }).ConfigureAwait(false);
             }
 
-            // can't use the convenient fall-through using or MMALCamera.Cleanup
-            // throws: Argument is invalid. Unable to destroy component
             cam.Cleanup();
 
             Console.WriteLine("Exiting.");
@@ -331,7 +369,7 @@ namespace pi_cam_test
                 {
                     Filename = "ffmpeg",
                     Arguments = $"-framerate 24 -i - -b:v 2500k -c copy {pathname}",
-                    EchoOutput = true,
+                    EchoOutput = false,
                     DrainOutputDelayMs = 500, // default
                     TerminationSignals = new[] { Signum.SIGINT, Signum.SIGQUIT }, // not the supposedly-correct SIGINT+SIGINT but this produces some exit output
                 }))
@@ -339,13 +377,10 @@ namespace pi_cam_test
                 // quality arg-help says set bitrate zero to use quality for VBR
                 var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 10, bitrate: 0, timeout: null);
                 using var encoder = new MMALVideoEncoder();
-                using var renderer = new MMALVideoRenderer();
                 encoder.ConfigureOutputPort(portCfg, ffmpeg);
                 cam.Camera.VideoPort.ConnectTo(encoder);
-                cam.Camera.PreviewPort.ConnectTo(renderer);
 
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
+                await cameraWarmupDelay(cam);
 
                 Console.WriteLine($"Capturing MP4: {pathname}");
                 var timerToken = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
@@ -355,8 +390,6 @@ namespace pi_cam_test
                 }).ConfigureAwait(false);
             }
 
-            // can't use the convenient fall-through using or MMALCamera.Cleanup
-            // throws: Argument is invalid. Unable to destroy component
             cam.Cleanup();
 
             Console.WriteLine("Exiting. Remember, video.mp4 is not valid.");
@@ -368,7 +401,7 @@ namespace pi_cam_test
 
             MMALCameraConfig.Resolution = new Resolution(640, 480);
             MMALCameraConfig.SensorMode = MMALSensorMode.Mode7; // for some reason mode 6 has a pinkish tinge
-            MMALCameraConfig.Framerate = new MMAL_RATIONAL_T(20, 1);
+            MMALCameraConfig.Framerate = 20;
 
             Console.WriteLine("Preparing pipeline...");
             cam.ConfigureCameraSettings();
@@ -386,13 +419,10 @@ namespace pi_cam_test
                 var portCfg = new MMALPortConfig(MMALEncoding.H264, MMALEncoding.I420, quality: 0, bitrate: MMALVideoEncoder.MaxBitrateMJPEG, timeout: null);
 
                 using var encoder = new MMALVideoEncoder();
-                using var renderer = new MMALVideoRenderer();
                 encoder.ConfigureOutputPort(portCfg, vlc);
                 cam.Camera.VideoPort.ConnectTo(encoder);
-                cam.Camera.PreviewPort.ConnectTo(renderer);
 
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
+                await cameraWarmupDelay(cam);
 
                 Console.WriteLine($"Streaming MJPEG for {seconds} sec to:");
                 Console.WriteLine($"http://{Environment.MachineName}.local:8554/");
@@ -403,8 +433,64 @@ namespace pi_cam_test
                 }).ConfigureAwait(false);
             }
 
-            // can't use the convenient fall-through using or MMALCamera.Cleanup
-            // throws: Argument is invalid. Unable to destroy component
+            cam.Cleanup();
+
+            Console.WriteLine("Exiting.");
+        }
+
+        static async Task visualizeStream(int seconds)
+        {
+            var cam = GetConfiguredCamera();
+
+            MMALCameraConfig.Resolution = new Resolution(640, 480);
+            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7; // for some reason mode 6 has a pinkish tinge
+            MMALCameraConfig.Framerate = 20;
+
+            Console.WriteLine("Preparing pipeline...");
+            cam.ConfigureCameraSettings();
+
+            var motionAlgorithm = new MotionAlgorithmRGBDiff(
+                    rgbThreshold: 200,          // default = 200
+                    cellPixelPercentage: 50,    // default = 50
+                    cellCountThreshold: 20      // default = 20
+                );
+
+            var motionConfig = new MotionConfig(
+                    algorithm: motionAlgorithm,
+                    testFrameInterval: TimeSpan.FromSeconds(3), // default = 3
+                    testFrameCooldown: TimeSpan.FromSeconds(3)  // default = 3
+                );
+
+            var raw_to_mjpeg_stream = new ExternalProcessCaptureHandlerOptions
+            {
+                Filename = "/bin/bash",
+                EchoOutput = true,
+                Arguments = "-c \"ffmpeg -hide_banner -f rawvideo -c:v rawvideo -pix_fmt rgb24 -s:v 640x480 -r 24 -i - -f h264 -c:v libx264 -preset ultrafast -tune zerolatency -vf format=yuv420p - | cvlc stream:///dev/stdin --sout '#transcode{vcodec=mjpg,vb=2500,fps=20,acodec=none}:standard{access=http{mime=multipart/x-mixed-replace;boundary=7b3cc56e5f51db803f790dad720ed50a},mux=mpjpeg,dst=:8554/}' :demux=h264\"",
+                DrainOutputDelayMs = 500, // default = 500
+                TerminationSignals = ExternalProcessCaptureHandlerOptions.SignalsFFmpeg
+            };
+
+            using (var shell = new ExternalProcessCaptureHandler(raw_to_mjpeg_stream))
+            using (var motion = new FrameBufferCaptureHandler(motionConfig, null))
+            using (var resizer = new MMALIspComponent())
+            {
+
+                motionAlgorithm.EnableAnalysis(shell);
+
+                resizer.ConfigureOutputPort<VideoPort>(0, new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480), motion);
+                cam.Camera.VideoPort.ConnectTo(resizer);
+
+                await cameraWarmupDelay(cam);
+
+                Console.WriteLine($"Streaming MJPEG with motion detection analysis for {seconds} sec to:");
+                Console.WriteLine($"http://{Environment.MachineName}.local:8554/");
+                var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(seconds));
+                await Task.WhenAll(new Task[]{
+                        shell.ProcessExternalAsync(timeout.Token),
+                        cam.ProcessAsync(cam.Camera.VideoPort, timeout.Token),
+                    }).ConfigureAwait(false);
+            }
+
             cam.Cleanup();
 
             Console.WriteLine("Exiting.");
@@ -423,8 +509,7 @@ namespace pi_cam_test
             {
                 // Two capture handlers are being used here, one for motion detection and the other to record a H.264 stream.
                 using var vidCaptureHandler = new CircularBufferCaptureHandler(4000000, ramdiskPath, "h264");
-                //using var motionCaptureHandler = new FrameBufferCaptureHandler();
-                using var motionCaptureHandler = new TempFrameBufferCaptureHandler();
+                using var motionCaptureHandler = new FrameBufferCaptureHandler();
                 using var resizer = new MMALIspComponent();
                 using var vidEncoder = new MMALVideoEncoder();
                 using var renderer = new MMALVideoRenderer();
@@ -443,23 +528,21 @@ namespace pi_cam_test
                 splitter.Outputs[0].ConnectTo(resizer);
                 splitter.Outputs[1].ConnectTo(vidEncoder);
 
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
+                await cameraWarmupDelay(cam);
 
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
 
-                //var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3), motionMaskPathname: motionMaskPath);
-                var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3));
+                var motionAlgorithm = new MotionAlgorithmRGBDiff(
+                        rgbThreshold: 200,          // default = 200
+                        cellPixelPercentage: 50,    // default = 50
+                        cellCountThreshold: 20      // default = 20
+                    );
 
-                //var motionConfig = new MotionConfigHSV(testFrameInterval: TimeSpan.FromSeconds(3))
-                //{
-                //    PerCellThreshold = true,    // frame-level diff is cell count, not pixels
-                //    Threshold = 5,              // minimum number of cells that must have changes
-                //    CellMinimumDiff = 200,      // minimum pixel diff per cell to qualify as changed
-
-                //    // 640 x 480 with 32 divisions = 1024 cells
-                //    // each cell is 20 x 15 = 300 pixels
-                //};
+                var motionConfig = new MotionConfig(
+                        algorithm: motionAlgorithm, 
+                        testFrameInterval: TimeSpan.FromSeconds(3), 
+                        testFrameCooldown: TimeSpan.FromSeconds(3)
+                    );
 
                 Console.WriteLine($"Detecting motion for {totalSeconds} seconds with sensitivity threshold {sensitivity}...");
 
@@ -500,8 +583,6 @@ namespace pi_cam_test
                     .ProcessAsync(cam.Camera.VideoPort, cts.Token);
             }
 
-            // can't use the convenient fall-through using or MMALCamera.Cleanup
-            // throws: Argument is invalid. Unable to destroy component
             cam.Cleanup();
 
             Console.WriteLine("Exiting.");
@@ -539,14 +620,13 @@ namespace pi_cam_test
                 splitter.Outputs[1].ConnectTo(vidEncoder);
                 splitter.Outputs[2].ConnectTo(imgEncoder); // new vs motion example
 
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
+                await cameraWarmupDelay(cam);
 
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
 
                 Console.WriteLine($"Detecting motion for {totalSeconds} seconds with sensitivity threshold {sensitivity}...");
 
-                var motionConfig = new MotionConfig(threshold: sensitivity, testFrameInterval: TimeSpan.FromSeconds(3), motionMaskPathname: motionMaskPath);
+                var motionConfig = new MotionConfig(algorithm: new MotionAlgorithmRGBDiff(), testFrameInterval: TimeSpan.FromSeconds(3), motionMaskPathname: motionMaskPath);
 
                 await cam.WithMotionDetection(
                     motionCaptureHandler,
@@ -610,16 +690,13 @@ namespace pi_cam_test
             File.Delete(rawPathname);
 
             using (var capture = new VideoStreamCaptureHandler(rawPathname))
-            using (var splitter = new MMALSplitterComponent())
             using (var resizer = new MMALIspComponent())
             {
-                splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
+                resizer.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
                 resizer.ConfigureOutputPort<VideoPort>(0, new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480), capture);
-                cam.Camera.VideoPort.ConnectTo(splitter);
-                splitter.Outputs[0].ConnectTo(resizer);
+                cam.Camera.VideoPort.ConnectTo(resizer);
 
-                Console.WriteLine("Camera warmup...");
-                await Task.Delay(2000);
+                await cameraWarmupDelay(cam);
 
                 Console.WriteLine($"Capturing {totalSeconds} seconds of raw RGB24 video...");
                 var cts = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
@@ -629,7 +706,116 @@ namespace pi_cam_test
             Console.WriteLine("Exiting.");
         }
 
-        static async Task visualize(string rawFilename)
+
+        //-----------------------------------------------------------------------------------------
+        // Still-image operations follow
+
+        static async Task snapshotSharpen()
+        {
+            DeleteFiles(ramdiskPath, "*.jpg");
+
+            //var context = ReadImageFile(ramdiskPath + "snapshot.bmp");
+            //var fx = new SharpenProcessor();
+            //fx.Apply(context);
+            //WriteImageFile(context, ramdiskPath + "snapshot.jpg", ImageFormat.Jpeg);
+
+            var cam = GetConfiguredCamera();
+            // Test with a native 32-byte res until Ian replies with his thoughts:
+            MMALCameraConfig.Resolution = new Resolution(640, 480);
+            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
+
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
+            cam.ConfigureCameraSettings();
+            using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
+            {
+                imgCaptureHandler.Manipulate(context =>
+                {
+                    context.Apply(new SharpenProcessor());
+                }, ImageFormat.Jpeg);
+                //await cam.TakeRawPicture(imgCaptureHandler);
+                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+            }
+            cam.Cleanup();
+        }
+
+        static async Task snapshotBlur3()
+        {
+            DeleteFiles(ramdiskPath, "*.jpg");
+
+            var cam = GetConfiguredCamera();
+            // Test with a native 32-byte res until Ian replies with his thoughts:
+            MMALCameraConfig.Resolution = new Resolution(640, 480);
+            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
+
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            cam.ConfigureCameraSettings();
+            using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
+            {
+                imgCaptureHandler.Manipulate(context =>
+                {
+                    context.Apply(new GaussianProcessor(GaussianMatrix.Matrix3x3));
+                }, ImageFormat.Jpeg);
+                //await cam.TakeRawPicture(imgCaptureHandler);
+                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+            }
+            cam.Cleanup();
+        }
+
+        static async Task snapshotBlur5()
+        {
+            DeleteFiles(ramdiskPath, "*.jpg");
+
+            var cam = GetConfiguredCamera();
+            // Test with a native 32-byte res until Ian replies with his thoughts:
+            MMALCameraConfig.Resolution = new Resolution(640, 480);
+            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
+
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            cam.ConfigureCameraSettings();
+            using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
+            {
+                imgCaptureHandler.Manipulate(context =>
+                {
+                    context.Apply(new GaussianProcessor(GaussianMatrix.Matrix5x5));
+                }, ImageFormat.Jpeg);
+                //await cam.TakeRawPicture(imgCaptureHandler);
+                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+            }
+            cam.Cleanup();
+        }
+
+        static async Task snapshotEdge()
+        {
+            DeleteFiles(ramdiskPath, "*.jpg");
+
+            var cam = GetConfiguredCamera();
+            // Test with a native 32-byte res until Ian replies with his thoughts:
+            MMALCameraConfig.Resolution = new Resolution(640, 480);
+            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
+
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            cam.ConfigureCameraSettings();
+            using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
+            {
+                imgCaptureHandler.Manipulate(context =>
+                {
+                    context.Apply(new EdgeDetection(EDStrength.High));
+                }, ImageFormat.Jpeg);
+                //await cam.TakeRawPicture(imgCaptureHandler);
+                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+            }
+            cam.Cleanup();
+        }
+
+
+        //-----------------------------------------------------------------------------------------
+        // File-based operations follow
+
+        static async Task visualizeFile(string rawFilename)
         {
             Console.WriteLine("Preparing pipeline...");
             MMALStandalone standalone = MMALStandalone.Instance;
@@ -638,21 +824,27 @@ namespace pi_cam_test
             var analysisPathname = ramdiskPath + "analysis.raw";
             File.Delete(analysisPathname);
 
-            // SummedRGB problem: Threshold is both the summed-RGB difference and the total count of changed pixels
-            var motionConfig = new MotionConfig()
-            {
-                Threshold = 130,                              // 130 is default, grid cells are 300px (20x15x1024)
-                TestFrameInterval = TimeSpan.FromSeconds(999) // 3 sec is default test frame interval (we now have motion cooldown, enable when detection improves)
-            }; 
+            var motionAlgorithm = new MotionAlgorithmRGBDiff(
+                    rgbThreshold: 200,          // default = 200
+                    cellPixelPercentage: 50,    // default = 50
+                    cellCountThreshold: 20      // default = 20
+                );
+
+            var motionConfig = new MotionConfig(
+                    algorithm: motionAlgorithm,
+                    testFrameInterval: TimeSpan.FromSeconds(999), // disable for visualization purposes
+                    testFrameCooldown: TimeSpan.FromSeconds(3)
+                );
 
             using (var stream = File.OpenRead(rawPathname))
             using (var input = new InputCaptureHandler(stream))
-            using (var analysis = new MotionAnalysisCaptureHandler(analysisPathname, motionConfig))
+            using (var output = new VideoStreamCaptureHandler(analysisPathname))
+            using (var motion = new FrameBufferCaptureHandler(motionConfig, null))
             using (var resizer = new MMALIspComponent())
             {
                 var cfg = new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480, framerate: 24, zeroCopy: true);
                 resizer.ConfigureInputPort(cfg, null, input);
-                resizer.ConfigureOutputPort<FileEncodeOutputPort>(0, cfg, analysis);
+                resizer.ConfigureOutputPort<FileEncodeOutputPort>(0, cfg, output);
 
                 Console.WriteLine("Processing raw RGB24 file through motion analysis filter...");
                 await standalone.ProcessAsync(resizer);
@@ -711,6 +903,10 @@ namespace pi_cam_test
                 proc.Dispose();
             }
         }
+
+
+        //-----------------------------------------------------------------------------------------
+        // Performance operations follow
 
         static void copyperf()
         {
@@ -820,6 +1016,21 @@ namespace pi_cam_test
             Console.WriteLine("Exiting.");
         }
 
+        //-----------------------------------------------------------------------------------------
+        // Utilities follow
+
+        static async Task cameraWarmupDelay(MMALCamera cam)
+        {
+            Console.WriteLine("Camera warmup...");
+            await Task.Delay(2000);
+
+            if (useDebug)
+            {
+                Console.WriteLine("Dumping pipeline to debug log");
+                cam.PrintPipeline();
+            }
+        }
+
         static MMALCamera GetConfiguredCamera(bool withOverlay = true)
         {
             if (useDebug)
@@ -839,10 +1050,37 @@ namespace pi_cam_test
             Console.WriteLine("Initializing...");
             var cam = MMALCamera.Instance;
 
-            // 1296 x 972 with 2x2 binning (full-frame 4:3 capture)
+            // V1 Camera (mode 0 = auto)
+            // Mode Size        Aspect Ratio    Frame rates     FOV Binning         32-byte-aligned buffer width
+            // 1    1920x1080   16:9            1 - 30fps       Partial none        no padding
+            // 2    2592x1944   4:3             1 - 15fps       Full none           no padding
+            // 3    2592x1944   4:3             0.1666 - 1fps   Full none           no padding
+            // 4    1296x972    4:3             1 - 42fps       Full 2x2            1312
+            // 5    1296x730    16:9            1 - 49fps       Full 2x2            1312
+            // 6    640x480     4:3             42.1 - 60fps    Full 2x2 plus skip  no padding
+            // 7    640x480     4:3             60.1 - 90fps    Full 2x2 plus skip  no padding
+
+            // V2 Camera (mode 0 = auto)
+            // Mode Size        Aspect Ratio    Frame rates     FOV Binning         32-byte-aligned buffer width
+            // 1    1920x1080   16:9            1 - 30fps       Partial none        no padding
+            // 2    3280x2464   4:3             0.1 - 15fps     Full none           3296
+            // 3    3280x2464   4:3             0.1 - 15fps     Full none           3296
+            // 4    1640x1232   4:3             0.1 - 40fps     Full 2x2            1664
+            // 5    1640x922    16:9            0.1 - 40fps     Full 2x2            1664
+            // 6    1280x720    16:9            40 - 90fps      Partial 2x2         no padding
+            // 7    640x480     4:3             60.1 - 90fps    Full 2x2 plus skip  no padding
+
+            // HQ Camera (mode 0 = auto)
+            // Mode Size        Aspect Ratio    Frame rates     FOV Binning         32-byte-aligned buffer width
+            // 1    2028x1080   169:90          0.1 - 50fps     Partial 2x2 binned  2048
+            // 2    2028x1520   4:3             0.1 - 50fps     Full 2x2 binned     2048
+            // 3    4056x3040   4:3             0.005 - 10fps   Full none           4064
+            // 4    1012x760    4:3             50.1 - 120fps   Full 4x4 scaled     1024
+
             MMALCameraConfig.Resolution = new Resolution(1296, 972);
             MMALCameraConfig.SensorMode = MMALSensorMode.Mode4;
-            MMALCameraConfig.Framerate = new MMAL_RATIONAL_T(24, 1); // numerator & denominator
+
+            MMALCameraConfig.Framerate = 20;
 
             if(withOverlay)
             {
@@ -889,5 +1127,69 @@ namespace pi_cam_test
         }
 
         static void WriteElapsedTime() => Console.WriteLine($"\nElapsed: {stopwatch.Elapsed:hh\\:mm\\:ss}\n\n");
+
+        static ImageContext ReadRawImageFile(string pathname)
+        {
+            var ctx = new ImageContext();
+            using (var fs = new FileStream(pathname, FileMode.Open, FileAccess.Read))
+            using (var bitmap = new Bitmap(fs))
+            {
+                BitmapData bmpData = null;
+                try
+                {
+                    bmpData = bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), ImageLockMode.ReadOnly, bitmap.PixelFormat);
+                    var ptr = bmpData.Scan0;
+                    int size = bmpData.Stride * bitmap.Height;
+                    var data = new byte[size];
+                    Marshal.Copy(ptr, data, 0, size);
+
+                    ctx.Data = data;
+                    ctx.Resolution = new Resolution(bmpData.Width, bmpData.Height);
+                    ctx.Stride = bmpData.Stride;
+                    ctx.Eos = true;
+                    ctx.Raw = true;
+
+                    ctx.PixelFormat = bmpData.PixelFormat switch
+                    {
+                        PixelFormat.Format24bppRgb => MMALEncoding.RGB24,
+                        PixelFormat.Format32bppRgb => MMALEncoding.RGB32,
+                        PixelFormat.Format32bppArgb => MMALEncoding.RGBA,
+                        _ => throw new Exception("Unsupported pixel format for raw file")
+                    };
+                }
+                finally
+                {
+                    bitmap.UnlockBits(bmpData);
+                }
+            }
+            return ctx;
+        }
+
+        static void WriteFormattedImageFile(ImageContext ctx, string pathname, ImageFormat format)
+        {
+            PixelFormat pixfmt = default;
+            if (ctx.PixelFormat == MMALEncoding.RGB24) pixfmt = PixelFormat.Format24bppRgb;
+            if (ctx.PixelFormat == MMALEncoding.RGB32) pixfmt = PixelFormat.Format32bppRgb;
+            if (ctx.PixelFormat == MMALEncoding.RGBA) pixfmt = PixelFormat.Format32bppArgb;
+            if (pixfmt == default) throw new Exception("Goddammit");
+
+            using (var bitmap = new Bitmap(ctx.Resolution.Width, ctx.Resolution.Height, pixfmt))
+            {
+                BitmapData bmpData = null;
+                try
+                {
+                    bmpData = bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), ImageLockMode.WriteOnly, bitmap.PixelFormat);
+                    var ptr = bmpData.Scan0;
+                    int size = bmpData.Stride * bitmap.Height;
+                    var data = ctx.Data;
+                    Marshal.Copy(data, 0, ptr, size);
+                }
+                finally
+                {
+                    bitmap.UnlockBits(bmpData);
+                }
+                bitmap.Save(pathname, format);
+            }
+        }
     }
 }

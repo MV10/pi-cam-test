@@ -1,6 +1,6 @@
 # pi-cam-test
 
-| :warning: This branch depends on a _LOCALLY-STORED_ pre-release v0.7 build of MMALSharp packages. |
+| :warning: This branch depends on _LOCALLY-STORED_ pre-release v0.7 builds of MMALSharp DLLs. |
 | --- |
 
 Getting to know the Raspberry Pi camera and the [MMALSharp](https://github.com/techyian/MMALSharp) .NET library.
@@ -18,6 +18,10 @@ pi-cam-test -copyperf
 pi-cam-test -transcodeperf [ram|sd|lan]
 pi-cam-test -fragmp4 [seconds]
 pi-cam-test -badmp4 [seconds]
+pi-cam-test -snapshotsharpen
+pi-cam-test -snapshotblur3
+pi-cam-test -snapshotblur5
+pi-cam-test -snapshotedge
 
 Add "-debug" for verbose logging (from MMALSharp).
 ```
