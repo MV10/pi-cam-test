@@ -21,6 +21,12 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 
+/*
+    Targets a dev build of the Serilog file sink to fix a Nuget
+    package dependency issue:
+    https://github.com/dotnet/sdk/issues/10621#issuecomment-717945693
+*/
+
 namespace pi_cam_test
 {
     class Program
@@ -62,6 +68,16 @@ namespace pi_cam_test
 
                     switch (args[0].ToLower())
                     {
+                        case "-snapshotgray":
+                            showHelp = false;
+                            await snapshotGray();
+                            break;
+
+                        case "-snapshotvignette":
+                            showHelp = false;
+                            await snapshotVignette();
+                            break;
+
                         case "-snapshotsharpen":
                             showHelp = false;
                             await snapshotSharpen();
@@ -90,6 +106,16 @@ namespace pi_cam_test
                         case "-bmp":
                             showHelp = false;
                             await bmp();
+                            break;
+
+                        case "-raw":
+                            showHelp = false;
+                            await raw();
+                            break;
+
+                        case "-rawtojpg":
+                            showHelp = false;
+                            await rawtojpg();
                             break;
 
                         case "-visfile":
@@ -156,6 +182,7 @@ namespace pi_cam_test
                                 if (sensitivity == 0) sensitivity = 130;
 
                                 await motion(seconds, recordSeconds, sensitivity);
+                                //await basicMotion(seconds);
                             }
                             break;
 
@@ -226,6 +253,8 @@ namespace pi_cam_test
                     Console.WriteLine("Usage:\n");
                     Console.WriteLine("pi-cam-test -jpg");
                     Console.WriteLine("pi-cam-test -bmp");
+                    Console.WriteLine("pi-cam-test -raw");
+                    Console.WriteLine("pi-cam-test -rawtojpg");
                     Console.WriteLine("pi-cam-test -rawrgb24 [seconds]");
                     Console.WriteLine("pi-cam-test -visfile [raw_filename]");
                     Console.WriteLine("pi-cam-test -rawtomp4 [raw_filename]");
@@ -239,6 +268,12 @@ namespace pi_cam_test
                     Console.WriteLine("pi-cam-test -transcodeperf [ram|sd|lan]");
                     Console.WriteLine("pi-cam-test -fragmp4 [seconds]");
                     Console.WriteLine("pi-cam-test -badmp4 [seconds]");
+                    Console.WriteLine("pi-cam-test -snapshotgray");
+                    Console.WriteLine("pi-cam-test -snapshotvignette");
+                    Console.WriteLine("pi-cam-test -snapshotsharpen");
+                    Console.WriteLine("pi-cam-test -snapshotblur3");
+                    Console.WriteLine("pi-cam-test -snapshotblur5");
+                    Console.WriteLine("pi-cam-test -snapshotedge");
                     Console.WriteLine($"\nAdd -debug to activate MMALSharp verbose debug logging.\n\nLocal output: {ramdiskPath}\nNetwork output: {networkPath}\n\nMotion detection deletes all .raw and .h264 files from the ramdisk.\n");
                 }
             }
@@ -280,6 +315,21 @@ namespace pi_cam_test
             using var handler = new ImageStreamCaptureHandler(pathname);
             Console.WriteLine($"Capturing BMP: {pathname}");
             await cam.TakePicture(handler, MMALEncoding.BMP, MMALEncoding.I420).ConfigureAwait(false);
+            cam.Cleanup();
+            Console.WriteLine("Exiting.");
+        }
+
+        static async Task raw()
+        {
+            var pathname = ramdiskPath + "snapshot.raw";
+            File.Delete(pathname);
+            var cam = GetConfiguredCamera();
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            cam.ConfigureCameraSettings();
+            using var handler = new ImageStreamCaptureHandler(pathname);
+            Console.WriteLine($"Capturing raw image: {pathname}");
+            await cam.TakeRawPicture(handler);
             cam.Cleanup();
             Console.WriteLine("Exiting.");
         }
@@ -461,7 +511,8 @@ namespace pi_cam_test
                     testFrameCooldown: TimeSpan.FromSeconds(3)  // default = 3
                 );
 
-            var raw_to_mjpeg_stream = new ExternalProcessCaptureHandlerOptions
+            var raw_to_mjpeg_stream = //VLCCaptureHandler.StreamRawRGB24asMJPEG();
+                new ExternalProcessCaptureHandlerOptions
             {
                 Filename = "/bin/bash",
                 EchoOutput = true,
@@ -496,6 +547,62 @@ namespace pi_cam_test
             Console.WriteLine("Exiting.");
         }
 
+        // simple motion detection from the new v0.7 wiki
+        static async Task basicMotion(int totalSeconds)
+        {
+            var cam = GetConfiguredCamera();
+            cam.ConfigureCameraSettings();
+
+            using (var motionCaptureHandler = new FrameBufferCaptureHandler())
+            //using (var splitter = new MMALSplitterComponent())
+            using (var resizer = new MMALIspComponent())
+            {
+                resizer.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
+
+                // The ISP resizer is used to output a small (640x480) image to ensure high performance. As described in
+                // the wiki, frame difference motion detection only works reliably on uncompressed, unencoded raw RGB data.
+                resizer.ConfigureOutputPort<VideoPort>(0, new MMALPortConfig(MMALEncoding.RGB24, MMALEncoding.RGB24, width: 640, height: 480), motionCaptureHandler);
+
+                cam.Camera.VideoPort.ConnectTo(resizer);
+                //splitter.Outputs[0].ConnectTo(resizer);
+
+                // Camera warm-up.
+                await Task.Delay(2000);
+
+                // Duration of the motion-detection operation.
+                var stoppingToken = new CancellationTokenSource(TimeSpan.FromSeconds(totalSeconds));
+                Console.WriteLine($"Detecting motion for {totalSeconds} seconds.");
+
+                // This example uses the default configuration settings.
+                var motionConfig = new MotionConfig(algorithm: new MotionAlgorithmRGBDiff());
+
+                await cam.WithMotionDetection(
+                    motionCaptureHandler,
+                    motionConfig,
+                    // This callback will be invoked when motion has been detected.
+                    async () =>
+                    {
+                        // When motion is detected, temporarily disable notifications
+                        motionCaptureHandler.DisableMotionDetection();
+                        
+                        // Wait 2 seconds
+                        Console.WriteLine($"\n     {DateTime.Now:hh\\:mm\\:ss} Motion detected, disabling detection for 2 seconds.");
+                        await Task.Delay(2000, stoppingToken.Token);
+
+                        // Re-enable motion detection
+                        if(!stoppingToken.IsCancellationRequested)
+                        {
+                            Console.WriteLine($"     {DateTime.Now:hh\\:mm\\:ss} ...motion detection re-enabled.");
+                            motionCaptureHandler.EnableMotionDetection();
+                        }
+                    })
+                    .ProcessAsync(cam.Camera.VideoPort, stoppingToken.Token);
+            }
+
+            cam.Cleanup();
+        }
+
+        // TODO remove/replace sensitivity args
         static async Task motion(int totalSeconds, int recordSeconds, int sensitivity)
         {
             DeleteFiles(ramdiskPath, "*.h264");
@@ -515,7 +622,6 @@ namespace pi_cam_test
                 using var renderer = new MMALVideoRenderer();
 
                 splitter.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), cam.Camera.VideoPort, null);
-                vidEncoder.ConfigureInputPort(new MMALPortConfig(MMALEncoding.OPAQUE, MMALEncoding.I420), splitter.Outputs[1], null);
 
                 // The ISP resizer is being used for better performance. Frame difference motion detection will only work if using raw video data. Do not encode to H.264/MJPEG.
                 // Resizing to a smaller image may improve performance, but ensure that the width/height are multiples of 32 and 16 respectively to avoid cropping.
@@ -588,6 +694,7 @@ namespace pi_cam_test
             Console.WriteLine("Exiting.");
         }
 
+        // TODO remove/replace sensitivity args
         static async Task splitter(int totalSeconds, int recordSeconds, int jpgInterval, int sensitivity)
         {
             DeleteFiles(ramdiskPath, "*.h264");
@@ -710,6 +817,79 @@ namespace pi_cam_test
         //-----------------------------------------------------------------------------------------
         // Still-image operations follow
 
+        static async Task snapshotGray()
+        {
+            DeleteFiles(ramdiskPath, "*.jpg");
+            var cam = GetConfiguredCamera();
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
+            cam.ConfigureCameraSettings();
+            using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
+            {
+                imgCaptureHandler.Manipulate(context =>
+                {
+                    var timing = new Stopwatch();
+                    timing.Start();
+
+                    // grayscale
+                    context.Apply(new CustomPixelProcessor<PixelProcessorMetadata>((pixel) =>
+                    {
+                        var i = (int)((pixel.r * 0.299f) + (pixel.g * 0.587f) + (pixel.b * 0.114f));
+                        return (i, i, i);
+                    }));
+
+                    timing.Stop();
+                    Console.WriteLine($"FX operation: {timing.ElapsedMilliseconds} ms");
+
+
+                }, ImageFormat.Jpeg);
+                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420); Console.WriteLine("(using encoded data)");
+
+                // resolution incorrect for raw  https://github.com/techyian/MMALSharp/issues/193
+                //await cam.TakeRawPicture(imgCaptureHandler); Console.WriteLine("(using raw data)");
+            }
+            cam.Cleanup();
+        }
+
+        static async Task snapshotVignette()
+        {
+            DeleteFiles(ramdiskPath, "*.jpg");
+            var cam = GetConfiguredCamera();
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
+            cam.ConfigureCameraSettings();
+            using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
+            {
+                imgCaptureHandler.Manipulate(context =>
+                {
+                    var timing = new Stopwatch();
+                    timing.Start();
+
+                    VignetteMetadata customData = default;
+                    customData.centerX = MMALCameraConfig.Resolution.Width / 2.0f;
+                    customData.centerY = MMALCameraConfig.Resolution.Height / 2.0f;
+                    customData.centerDist = Math.Sqrt(Math.Pow(customData.centerX, 2) + Math.Pow(customData.centerY, 2));
+
+                    context.Apply(new CustomPixelProcessor<VignetteMetadata>((pixel) =>
+                    {
+                        var pointDist = Math.Sqrt(Math.Pow(pixel.x - pixel.centerX, 2) + Math.Pow(pixel.y - pixel.centerY, 2));
+                        var attenuate = 1.0f - (pointDist / pixel.centerDist);
+                        return ((int)(pixel.r * attenuate), (int)(pixel.g * attenuate), (int)(pixel.b * attenuate));
+                    }, customData));
+
+                    timing.Stop();
+                    Console.WriteLine($"FX operation: {timing.ElapsedMilliseconds} ms");
+
+
+                }, ImageFormat.Jpeg);
+                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420); Console.WriteLine("(using encoded data)");
+
+                // resolution incorrect for raw  https://github.com/techyian/MMALSharp/issues/193
+                //await cam.TakeRawPicture(imgCaptureHandler); Console.WriteLine("(using raw data)");
+            }
+            cam.Cleanup();
+        }
+
         static async Task snapshotSharpen()
         {
             DeleteFiles(ramdiskPath, "*.jpg");
@@ -720,10 +900,6 @@ namespace pi_cam_test
             //WriteImageFile(context, ramdiskPath + "snapshot.jpg", ImageFormat.Jpeg);
 
             var cam = GetConfiguredCamera();
-            // Test with a native 32-byte res until Ian replies with his thoughts:
-            MMALCameraConfig.Resolution = new Resolution(640, 480);
-            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
-
             MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
             MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
             cam.ConfigureCameraSettings();
@@ -733,8 +909,8 @@ namespace pi_cam_test
                 {
                     context.Apply(new SharpenProcessor());
                 }, ImageFormat.Jpeg);
-                //await cam.TakeRawPicture(imgCaptureHandler);
-                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+                await cam.TakeRawPicture(imgCaptureHandler); Console.WriteLine("(using raw data)");
+                //await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420); Console.WriteLine("(using encoded data)");
             }
             cam.Cleanup();
         }
@@ -742,23 +918,19 @@ namespace pi_cam_test
         static async Task snapshotBlur3()
         {
             DeleteFiles(ramdiskPath, "*.jpg");
-
             var cam = GetConfiguredCamera();
-            // Test with a native 32-byte res until Ian replies with his thoughts:
-            MMALCameraConfig.Resolution = new Resolution(640, 480);
-            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
-
-            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
-            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
             cam.ConfigureCameraSettings();
             using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
             {
-                imgCaptureHandler.Manipulate(context =>
-                {
-                    context.Apply(new GaussianProcessor(GaussianMatrix.Matrix3x3));
-                }, ImageFormat.Jpeg);
-                //await cam.TakeRawPicture(imgCaptureHandler);
-                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+            imgCaptureHandler.Manipulate(context =>
+            {
+                context.Apply(new GaussianProcessor(GaussianMatrix.Matrix3x3));
+
+            }, ImageFormat.Jpeg);
+            await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420); Console.WriteLine("(using encoded data)");
+            //await cam.TakeRawPicture(imgCaptureHandler); Console.WriteLine("(using raw data)");
             }
             cam.Cleanup();
         }
@@ -766,14 +938,9 @@ namespace pi_cam_test
         static async Task snapshotBlur5()
         {
             DeleteFiles(ramdiskPath, "*.jpg");
-
             var cam = GetConfiguredCamera();
-            // Test with a native 32-byte res until Ian replies with his thoughts:
-            MMALCameraConfig.Resolution = new Resolution(640, 480);
-            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
-
-            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
-            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
             cam.ConfigureCameraSettings();
             using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
             {
@@ -781,8 +948,8 @@ namespace pi_cam_test
                 {
                     context.Apply(new GaussianProcessor(GaussianMatrix.Matrix5x5));
                 }, ImageFormat.Jpeg);
-                //await cam.TakeRawPicture(imgCaptureHandler);
-                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+                await cam.TakeRawPicture(imgCaptureHandler); Console.WriteLine("(using raw data)");
+                //await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420); Console.WriteLine("(using encoded data)");
             }
             cam.Cleanup();
         }
@@ -790,14 +957,9 @@ namespace pi_cam_test
         static async Task snapshotEdge()
         {
             DeleteFiles(ramdiskPath, "*.jpg");
-
             var cam = GetConfiguredCamera();
-            // Test with a native 32-byte res until Ian replies with his thoughts:
-            MMALCameraConfig.Resolution = new Resolution(640, 480);
-            MMALCameraConfig.SensorMode = MMALSensorMode.Mode7;
-
-            MMALCameraConfig.Encoding = MMALEncoding.RGB24;
-            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24;
+            MMALCameraConfig.Encoding = MMALEncoding.RGB24; // for raw
+            MMALCameraConfig.EncodingSubFormat = MMALEncoding.RGB24; // for raw
             cam.ConfigureCameraSettings();
             using (var imgCaptureHandler = new ImageStreamCaptureHandler(ramdiskPath + "snapshot.jpg"))
             {
@@ -805,12 +967,11 @@ namespace pi_cam_test
                 {
                     context.Apply(new EdgeDetection(EDStrength.High));
                 }, ImageFormat.Jpeg);
-                //await cam.TakeRawPicture(imgCaptureHandler);
-                await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420);
+                await cam.TakeRawPicture(imgCaptureHandler); Console.WriteLine("(using raw data)");
+                //await cam.TakePicture(imgCaptureHandler, MMALEncoding.JPEG, MMALEncoding.I420); Console.WriteLine("(using encoded data)");
             }
             cam.Cleanup();
         }
-
 
         //-----------------------------------------------------------------------------------------
         // File-based operations follow
@@ -904,6 +1065,18 @@ namespace pi_cam_test
             }
         }
 
+        static async Task rawtojpg()
+        {
+            var data = await File.ReadAllBytesAsync(ramdiskPath + "snapshot.raw");
+            Console.WriteLine($"Raw bytes read: {data.Length:###,###}");
+            DeleteFiles(ramdiskPath, "*.jpg");
+            Console.WriteLine("Writing snapshot.jpg...");
+
+            // assumptions from the raw() method above
+            //RawToImageFile(ramdiskPath + "snapshot.jpg", ImageFormat.Jpeg, data, 1296, 972, PixelFormat.Format24bppRgb);
+            // use the 1296x972 resolution's padded buffer dimensions of 1312x976
+            RawToImageFile(ramdiskPath + "snapshot.jpg", ImageFormat.Jpeg, data, 1312, 976, PixelFormat.Format24bppRgb);
+        }
 
         //-----------------------------------------------------------------------------------------
         // Performance operations follow
@@ -1050,32 +1223,35 @@ namespace pi_cam_test
             Console.WriteLine("Initializing...");
             var cam = MMALCamera.Instance;
 
+            // The hardware buffer size is horizontally padded to the nearest 32-byte boundary and
+            // vertically padded to the nearest 16-byte boundary.
+
             // V1 Camera (mode 0 = auto)
-            // Mode Size        Aspect Ratio    Frame rates     FOV Binning         32-byte-aligned buffer width
-            // 1    1920x1080   16:9            1 - 30fps       Partial none        no padding
-            // 2    2592x1944   4:3             1 - 15fps       Full none           no padding
-            // 3    2592x1944   4:3             0.1666 - 1fps   Full none           no padding
-            // 4    1296x972    4:3             1 - 42fps       Full 2x2            1312
-            // 5    1296x730    16:9            1 - 49fps       Full 2x2            1312
-            // 6    640x480     4:3             42.1 - 60fps    Full 2x2 plus skip  no padding
-            // 7    640x480     4:3             60.1 - 90fps    Full 2x2 plus skip  no padding
+            // Mode Resolution    Aspect  FPS Range       FOV Binning         Buffer       Pads
+            // 1    1920 x 1080   16:9    1 - 30fps       Partial none        1920 x 1088  Y
+            // 2    2592 x 1944   4:3     1 - 15fps       Full none           2592 x 1952  Y
+            // 3    2592 x 1944   4:3     0.1666 - 1fps   Full none           2592 x 1952  Y
+            // 4    1296 x 972    4:3     1 - 42fps       Full 2x2            1312 x 976   XY
+            // 5    1296 x 730    16:9    1 - 49fps       Full 2x2            1312 x 736   XY
+            // 6     640 x 480    4:3     42.1 - 60fps    Full 2x2 plus skip  no padding   none
+            // 7     640 x 480    4:3     60.1 - 90fps    Full 2x2 plus skip  no padding   none
 
             // V2 Camera (mode 0 = auto)
-            // Mode Size        Aspect Ratio    Frame rates     FOV Binning         32-byte-aligned buffer width
-            // 1    1920x1080   16:9            1 - 30fps       Partial none        no padding
-            // 2    3280x2464   4:3             0.1 - 15fps     Full none           3296
-            // 3    3280x2464   4:3             0.1 - 15fps     Full none           3296
-            // 4    1640x1232   4:3             0.1 - 40fps     Full 2x2            1664
-            // 5    1640x922    16:9            0.1 - 40fps     Full 2x2            1664
-            // 6    1280x720    16:9            40 - 90fps      Partial 2x2         no padding
-            // 7    640x480     4:3             60.1 - 90fps    Full 2x2 plus skip  no padding
+            // Mode Resolution    Aspect  FPS Range       FOV Binning         Buffer       Pads
+            // 1    1920 x 1080   16:9    1 - 30fps       Partial none        1920 x 1088  Y
+            // 2    3280 x 2464   4:3     0.1 - 15fps     Full none           3296 x 2464  X
+            // 3    3280 x 2464   4:3     0.1 - 15fps     Full none           3296 x 2464  X
+            // 4    1640 x 1232   4:3     0.1 - 40fps     Full 2x2            1664 x 1232  X
+            // 5    1640 x 922    16:9    0.1 - 40fps     Full 2x2            1664 x 928   XY
+            // 6    1280 x 720    16:9    40 - 90fps      Partial 2x2         no padding   none
+            // 7     640 x 480    4:3     60.1 - 90fps    Full 2x2 plus skip  no padding   none
 
             // HQ Camera (mode 0 = auto)
-            // Mode Size        Aspect Ratio    Frame rates     FOV Binning         32-byte-aligned buffer width
-            // 1    2028x1080   169:90          0.1 - 50fps     Partial 2x2 binned  2048
-            // 2    2028x1520   4:3             0.1 - 50fps     Full 2x2 binned     2048
-            // 3    4056x3040   4:3             0.005 - 10fps   Full none           4064
-            // 4    1012x760    4:3             50.1 - 120fps   Full 4x4 scaled     1024
+            // Mode Resolution    Aspect  FPS Range       FOV Binning         Buffer       Pads
+            // 1    2028 x 1080   169:90  0.1 - 50fps     Partial 2x2 binned  2048 x 1088  XY
+            // 2    2028 x 1520   4:3     0.1 - 50fps     Full 2x2 binned     2048 x 1520  X
+            // 3    4056 x 3040   4:3     0.005 - 10fps   Full none           4064 x 3040  X
+            // 4    1012 x 760    4:3     50.1 - 120fps   Full 4x4 scaled     1024 x 768   XY
 
             MMALCameraConfig.Resolution = new Resolution(1296, 972);
             MMALCameraConfig.SensorMode = MMALSensorMode.Mode4;
@@ -1128,7 +1304,7 @@ namespace pi_cam_test
 
         static void WriteElapsedTime() => Console.WriteLine($"\nElapsed: {stopwatch.Elapsed:hh\\:mm\\:ss}\n\n");
 
-        static ImageContext ReadRawImageFile(string pathname)
+        static ImageContext ReadImageFile(string pathname)
         {
             var ctx = new ImageContext();
             using (var fs = new FileStream(pathname, FileMode.Open, FileAccess.Read))
@@ -1190,6 +1366,31 @@ namespace pi_cam_test
                 }
                 bitmap.Save(pathname, format);
             }
+        }
+
+        static void RawToImageFile(string pathname, ImageFormat fileFormat, byte[] data, int width, int height, PixelFormat pixelFormat)
+        {
+            // Does not compensate for the fact that Bitmap.Save assumes the RGB raw
+            // buffer is actually in BGR sequence, so the colors will be wrong. The
+            // MMALSharp library compensates for this in ConvolutionBase when the v0.7
+            // flag MMALCameraConfig.ConvertRawToBGR = true
+
+            using var bitmap = new Bitmap(width, height, pixelFormat);
+
+            BitmapData bmpData = null;
+            try
+            {
+                bmpData = bitmap.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, pixelFormat);
+                var ptr = bmpData.Scan0;
+                int size = bmpData.Stride * height;
+                Marshal.Copy(data, 0, ptr, size);
+            }
+            finally
+            {
+                bitmap.UnlockBits(bmpData);
+            }
+
+            bitmap.Save(pathname, fileFormat);
         }
     }
 }

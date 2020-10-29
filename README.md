@@ -5,15 +5,24 @@
 
 Getting to know the Raspberry Pi camera and the [MMALSharp](https://github.com/techyian/MMALSharp) .NET library.
 
-Mostly these are variations on the samples in MMALSharp's wiki. Probably the most interesting part is `ExternalProcessCaptureHandler` which is a generic process-management overhaul based on MMALSharp's FFmpegCaptureHandler.
+Mostly these are variations on the samples in MMALSharp's wiki.
 
 ```
 Usage:
+
 pi-cam-test -jpg
+pi-cam-test -bmp
+pi-cam-test -raw
+pi-cam-test -rawtojpg
+pi-cam-test -rawrgb24 [seconds]
+pi-cam-test -visfile [raw_filename]
+pi-cam-test -rawtomp4 [raw_filename]
+pi-cam-test -h264tomp4 [h264_pathname] [mp4_pathname]
 pi-cam-test -h264 [seconds]
 pi-cam-test -stream [seconds]
-pi-cam-test -motion [detect-seconds] [record-seconds] [sensitivity]
-pi-cam-test -splitter [detect-seconds] [record-seconds] [jpg-interval] [sensitivity]
+pi-cam-test -visstream [seconds]
+pi-cam-test -motion [total_seconds] [record_seconds=10] [sensitivity=130]
+pi-cam-test -splitter [total_seconds] [record_seconds=10] [jpg-interval=1] [sensitivity=130]
 pi-cam-test -copyperf
 pi-cam-test -transcodeperf [ram|sd|lan]
 pi-cam-test -fragmp4 [seconds]
@@ -23,7 +32,12 @@ pi-cam-test -snapshotblur3
 pi-cam-test -snapshotblur5
 pi-cam-test -snapshotedge
 
-Add "-debug" for verbose logging (from MMALSharp).
+Add -debug to activate MMALSharp verbose debug logging.
+
+Local output: /media/ramdisk/
+Network output: /media/nas_dvr/smartcam/
+
+Motion detection deletes all .raw and .h264 files from the ramdisk.
 ```
 
 Assumptions, defaults, hard-coded paths, etc:
@@ -46,12 +60,10 @@ MP4 generation is broken (hence the switch name -badmp4) -- it's an old, well-kn
 
 The other MP4 option, -fragmp4, produces a "fragmented" MP4 which means it dumps keyframes a lot more often. Supposedly it should produce a larger file, but it does not -- I think because the final buffer isn't being written. It's actually a smaller file than the broken MP4, but also truncated -- a 10 second timeout produces 8 seconds of video. Regardless, it's not really correct either, but the code is hacked to add 2 seconds to the requested time to account for this. It seems independent of the requested duration.
 
-Apart from just learning the MMALSharp library, this project was also used to test some ideas and scenarios in preparation for my [smartcam](https://github.com/MV10/smartcam) project.
+Apart from just learning the MMALSharp library, this project was also used to test some ideas and scenarios in preparation for my [spicam](https://github.com/MV10/spicam) and [smartcam](https://github.com/MV10/smartcam) projects.
 
 The transcode perf tests in particular were interesting. 60 seconds of h.264 video can hit 300 MB depending on scene movement, and transcoding to MP4 doesn't change it much. ffmpeg transcodes that to ramdisk (using copy mode and the +faststart option) in just 4 seconds, and can move the file to the NAS over wifi in about 30 seconds (my wifi is very busy/noisy). That's acceptable for my purposes. To my surprise, transcoding to the SD card was slower than I expected at 51 seconds. Transcoding directly to the NAS was the worst (not surprisingly) at more than 2 minutes.
 
 The +faststart option produces a lot of overhead, however (especially when writing to the network), because ffmpeg writes a whole new copy of the file to put that MOOV atom at the beginning of the file. Without that, transcoding the same h.264 file to ramdisk is 1 second faster, but SD card transcoding is a mere 9 seconds (5.5x faster!) and transcoding directly to the NAS is just 32 seconds -- virtually the same as transcoding to RAM then doing a file-copy.
 
 I'll probably add a feature to transcode a given recording on demand after the camera system decides to record and store something, rather than transcoding everything. These were useful tests to help me plan my project. The code in the repository has the faststart option commented out.
-
-
